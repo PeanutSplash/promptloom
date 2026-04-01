@@ -211,4 +211,9 @@ export interface CompileResult {
 
 // ─── Provider Types ──────────────────────────────────────────────
 
-export type ProviderFormat = 'anthropic' | 'openai' | 'bedrock'
+export type ProviderFormat =
+  | 'anthropic'
+  | 'openai'
+  | 'openai-responses'
+  | 'bedrock'
+  | 'gemini'

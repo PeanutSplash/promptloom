@@ -52,7 +52,14 @@ export { section, dynamicSection, SectionCache, resolveSections } from './sectio
 export { CACHE_BOUNDARY, splitAtBoundary } from './boundary.ts'
 
 // Provider formatters
-export { toAnthropic, toOpenAI, toBedrock, toAnthropicBlocks } from './providers.ts'
+export {
+  toAnthropic,
+  toOpenAI,
+  toOpenAIResponses,
+  toBedrock,
+  toGemini,
+  toAnthropicBlocks,
+} from './providers.ts'
 
 // Tool helpers
 export { defineTool, ToolCache, compileTool, compileTools } from './tool.ts'
@@ -93,6 +100,10 @@ export type {
   AnthropicTextBlock,
   AnthropicTool,
   OpenAITool,
+  OpenAIResponsesTool,
   BedrockSystemBlock,
   BedrockTool,
+  GeminiPart,
+  GeminiContent,
+  GeminiTool,
 } from './providers.ts'

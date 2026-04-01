@@ -17,7 +17,7 @@ Every LLM app stitches prompts together from pieces. Most do it with string conc
 | Too many tools bloat the system prompt | **Deferred tools** — marked tools are excluded from the prompt, loaded on demand |
 | Sections only relevant to some models/environments | **Conditional sections** — `when` predicates gate inclusion per compile context |
 | No idea how many tokens the prompt costs | **Token estimation** built into every `compile()` call |
-| Different API providers need different formats | **Multi-provider output** — `toAnthropic()`, `toOpenAI()`, `toBedrock()` |
+| Different API providers need different formats | **Multi-provider output** — `toAnthropic()`, `toOpenAI()`, `toOpenAIResponses()`, `toBedrock()`, `toGemini()` |
 
 ## Install
 
@@ -140,6 +140,74 @@ const result = await pc.compile()
 const { system, toolConfig } = toBedrock(result) // cachePoint + toolSpec format
 
 // Use with @aws-sdk/client-bedrock-runtime ConverseCommand
+```
+
+### Google Gemini / Vertex AI
+
+```ts
+import { GoogleGenAI } from '@google/genai'
+import { PromptCompiler, toGemini } from 'promptloom'
+
+const pc = new PromptCompiler()
+// ... add zones, sections, and tools ...
+
+const result = await pc.compile()
+const { systemInstruction, tools } = toGemini(result) // parts array + functionDeclarations
+
+const response = await new GoogleGenAI({ apiKey: '...' }).models.generateContent({
+  model: 'gemini-2.5-pro',
+  contents: [{ role: 'user', parts: [{ text: 'Review this PR' }] }],
+  config: { systemInstruction, tools },
+})
+```
+
+The same format works for Vertex AI — just swap the client initialization.
+
+### OpenAI Responses API
+
+```ts
+import OpenAI from 'openai'
+import { PromptCompiler, toOpenAIResponses } from 'promptloom'
+
+const pc = new PromptCompiler()
+// ... add zones, sections, and tools ...
+
+const result = await pc.compile()
+const { instructions, tools } = toOpenAIResponses(result) // instructions field + flat tools
+
+const response = await new OpenAI().responses.create({
+  model: 'gpt-4o',
+  instructions,
+  input: 'Review this PR',
+  tools,
+})
+```
+
+### OpenAI-Compatible Providers
+
+`toOpenAI()` works with any OpenAI-compatible API — just swap the `baseURL`:
+
+```ts
+import OpenAI from 'openai'
+import { PromptCompiler, toOpenAI } from 'promptloom'
+
+const result = await pc.compile()
+const { system, tools } = toOpenAI(result)
+
+// Groq
+const groq = new OpenAI({ baseURL: 'https://api.groq.com/openai/v1', apiKey: '...' })
+
+// Together AI
+const together = new OpenAI({ baseURL: 'https://api.together.xyz/v1', apiKey: '...' })
+
+// DeepSeek
+const deepseek = new OpenAI({ baseURL: 'https://api.deepseek.com', apiKey: '...' })
+
+// Mistral (also has native SDK)
+const mistral = new OpenAI({ baseURL: 'https://api.mistral.ai/v1', apiKey: '...' })
+
+// Fireworks AI
+const fireworks = new OpenAI({ baseURL: 'https://api.fireworks.ai/inference/v1', apiKey: '...' })
 ```
 
 ## Core Concepts
@@ -330,12 +398,22 @@ parseTokenBudget('hello world')     // null
 ### Provider Formatters
 
 ```ts
-import { toAnthropic, toOpenAI, toBedrock } from 'promptloom'
+import { toAnthropic, toOpenAI, toOpenAIResponses, toBedrock, toGemini } from 'promptloom'
 
-toAnthropic(result)  // { system: TextBlockParam[], tools: AnthropicTool[] }
-toOpenAI(result)     // { system: string, tools: { type: 'function', function }[] }
-toBedrock(result)    // { system: BedrockSystemBlock[], toolConfig: { tools } }
+toAnthropic(result)       // { system: TextBlockParam[], tools: AnthropicTool[] }
+toOpenAI(result)          // { system: string, tools: { type: 'function', function }[] }
+toOpenAIResponses(result) // { instructions: string, tools: OpenAIResponsesTool[] }
+toBedrock(result)         // { system: BedrockSystemBlock[], toolConfig: { tools } }
+toGemini(result)          // { systemInstruction: GeminiContent, tools: GeminiTool[] }
 ```
+
+| Formatter | Providers |
+|-----------|-----------|
+| `toAnthropic()` | Anthropic (1P) |
+| `toOpenAI()` | OpenAI, Azure OpenAI, Mistral, Groq, Together, DeepSeek, Fireworks, Cohere v2 |
+| `toOpenAIResponses()` | OpenAI Responses API |
+| `toBedrock()` | AWS Bedrock (Claude, Llama, Mistral, Cohere — unified Converse API) |
+| `toGemini()` | Google Gemini, Google Vertex AI |
 
 ### Standalone Utilities
 

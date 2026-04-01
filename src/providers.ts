@@ -1,13 +1,24 @@
 /**
  * promptloom — Multi-provider output formatting
  *
- * Claude Code supports multiple API providers:
- * - Anthropic (1P): cache_control with scope on text blocks
- * - AWS Bedrock: cache_control without scope
- * - Google Vertex: cache_control without scope
- * - OpenAI: single string system prompt, no caching API
+ * Formats CompileResult for each LLM API provider:
  *
- * This module formats CompileResult for each provider.
+ * - **Anthropic (1P)**: cache_control with scope on text blocks
+ *   @see https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
+ *
+ * - **AWS Bedrock**: cachePoint-based caching, toolSpec wrapper
+ *   @see https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference-call.html
+ *
+ * - **OpenAI Chat Completions**: single string system prompt, auto prefix caching
+ *   Also compatible with: Azure OpenAI, Mistral, Groq, Together, DeepSeek, Fireworks, Cohere v2
+ *   @see https://platform.openai.com/docs/api-reference/chat/create
+ *
+ * - **OpenAI Responses**: instructions field + input array (new API, March 2025)
+ *   @see https://platform.openai.com/docs/api-reference/responses/create
+ *
+ * - **Google Gemini / Vertex AI**: systemInstruction with parts array, explicit context caching
+ *   @see https://ai.google.dev/api/generate-content
+ *   @see https://ai.google.dev/gemini-api/docs/caching
  */
 
 import type { CacheBlock, CompiledTool, CompileResult } from './types.ts'
@@ -135,6 +146,104 @@ export function toBedrock(result: CompileResult): {
         },
       })),
     },
+  }
+}
+
+// ─── Google Gemini / Vertex AI ──────────────────────────────────
+// @see https://ai.google.dev/api/generate-content
+// @see https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference
+
+export interface GeminiPart {
+  text: string
+}
+
+export interface GeminiContent {
+  role?: string
+  parts: GeminiPart[]
+}
+
+/**
+ * Gemini tool declaration.
+ * @see https://ai.google.dev/api/caching#FunctionDeclaration
+ */
+export interface GeminiTool {
+  functionDeclarations: {
+    name: string
+    description: string
+    parameters: Record<string, unknown>
+  }[]
+}
+
+/**
+ * Format compile result for Google Gemini / Vertex AI API.
+ *
+ * Gemini uses a separate `systemInstruction` field (not in messages array)
+ * with a `parts` array. Tools are wrapped in `functionDeclarations`.
+ *
+ * The returned format works for both:
+ * - Google AI Studio (Gemini API direct): `@google/generative-ai`
+ * - Google Cloud Vertex AI: `@google-cloud/vertexai`
+ *
+ * @see https://ai.google.dev/api/generate-content#v1beta.GenerateContentRequest
+ */
+export function toGemini(result: CompileResult): {
+  systemInstruction: GeminiContent
+  tools: GeminiTool[]
+} {
+  return {
+    systemInstruction: {
+      parts: result.blocks.map((block) => ({ text: block.text })),
+    },
+    tools: result.tools.length > 0
+      ? [
+          {
+            functionDeclarations: result.tools.map((tool) => ({
+              name: tool.name,
+              description: tool.description,
+              parameters: tool.input_schema,
+            })),
+          },
+        ]
+      : [],
+  }
+}
+
+// ─── OpenAI Responses API ───────────────────────────────────────
+// @see https://platform.openai.com/docs/api-reference/responses/create
+// @see https://platform.openai.com/docs/guides/migrate-to-responses
+
+export interface OpenAIResponsesTool {
+  type: 'function'
+  name: string
+  description: string
+  parameters: Record<string, unknown>
+  strict?: boolean
+}
+
+/**
+ * Format compile result for OpenAI Responses API.
+ *
+ * The Responses API (March 2025) uses a top-level `instructions` field
+ * instead of a system message in the messages array. Tools are flattened
+ * (no nested `function` wrapper).
+ *
+ * Also supports `developer` role messages via the `input` array,
+ * but `instructions` is the simpler path for system prompts.
+ *
+ * @see https://platform.openai.com/docs/api-reference/responses/create
+ */
+export function toOpenAIResponses(result: CompileResult): {
+  instructions: string
+  tools: OpenAIResponsesTool[]
+} {
+  return {
+    instructions: result.text,
+    tools: result.tools.map((tool) => ({
+      type: 'function' as const,
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.input_schema,
+    })),
   }
 }
 

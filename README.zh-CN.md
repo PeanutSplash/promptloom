@@ -17,7 +17,7 @@
 | 工具太多撑爆系统提示词 | **延迟工具** —— 标记为 deferred 的工具不进提示词，按需加载 |
 | 某些段只和特定模型/环境相关 | **条件段** —— `when` 谓词按编译上下文决定是否包含 |
 | 不知道提示词花了多少 Token | 每次 `compile()` 自动输出 **Token 估算** |
-| 不同 API 提供商格式不同 | **多 Provider 输出** —— `toAnthropic()`、`toOpenAI()`、`toBedrock()` |
+| 不同 API 提供商格式不同 | **多 Provider 输出** —— `toAnthropic()`、`toOpenAI()`、`toOpenAIResponses()`、`toBedrock()`、`toGemini()` |
 
 ## 安装
 
@@ -140,6 +140,74 @@ const result = await pc.compile()
 const { system, toolConfig } = toBedrock(result) // cachePoint + toolSpec 格式
 
 // 用于 @aws-sdk/client-bedrock-runtime ConverseCommand
+```
+
+### Google Gemini / Vertex AI
+
+```ts
+import { GoogleGenAI } from '@google/genai'
+import { PromptCompiler, toGemini } from 'promptloom'
+
+const pc = new PromptCompiler()
+// ... 添加 zone、section、tool ...
+
+const result = await pc.compile()
+const { systemInstruction, tools } = toGemini(result) // parts 数组 + functionDeclarations
+
+const response = await new GoogleGenAI({ apiKey: '...' }).models.generateContent({
+  model: 'gemini-2.5-pro',
+  contents: [{ role: 'user', parts: [{ text: '审查这个 PR' }] }],
+  config: { systemInstruction, tools },
+})
+```
+
+Vertex AI 使用相同格式，只需更换客户端初始化方式。
+
+### OpenAI Responses API
+
+```ts
+import OpenAI from 'openai'
+import { PromptCompiler, toOpenAIResponses } from 'promptloom'
+
+const pc = new PromptCompiler()
+// ... 添加 zone、section、tool ...
+
+const result = await pc.compile()
+const { instructions, tools } = toOpenAIResponses(result) // instructions 字段 + 扁平工具
+
+const response = await new OpenAI().responses.create({
+  model: 'gpt-4o',
+  instructions,
+  input: '审查这个 PR',
+  tools,
+})
+```
+
+### OpenAI 兼容供应商
+
+`toOpenAI()` 适用于所有 OpenAI 兼容 API —— 只需更换 `baseURL`：
+
+```ts
+import OpenAI from 'openai'
+import { PromptCompiler, toOpenAI } from 'promptloom'
+
+const result = await pc.compile()
+const { system, tools } = toOpenAI(result)
+
+// Groq
+const groq = new OpenAI({ baseURL: 'https://api.groq.com/openai/v1', apiKey: '...' })
+
+// Together AI
+const together = new OpenAI({ baseURL: 'https://api.together.xyz/v1', apiKey: '...' })
+
+// DeepSeek
+const deepseek = new OpenAI({ baseURL: 'https://api.deepseek.com', apiKey: '...' })
+
+// Mistral（也有原生 SDK）
+const mistral = new OpenAI({ baseURL: 'https://api.mistral.ai/v1', apiKey: '...' })
+
+// Fireworks AI
+const fireworks = new OpenAI({ baseURL: 'https://api.fireworks.ai/inference/v1', apiKey: '...' })
 ```
 
 ## 核心概念
@@ -330,12 +398,22 @@ parseTokenBudget('hello world')     // null
 ### Provider 格式化
 
 ```ts
-import { toAnthropic, toOpenAI, toBedrock } from 'promptloom'
+import { toAnthropic, toOpenAI, toOpenAIResponses, toBedrock, toGemini } from 'promptloom'
 
-toAnthropic(result)  // { system: TextBlockParam[], tools: AnthropicTool[] }
-toOpenAI(result)     // { system: string, tools: { type: 'function', function }[] }
-toBedrock(result)    // { system: BedrockSystemBlock[], toolConfig: { tools } }
+toAnthropic(result)       // { system: TextBlockParam[], tools: AnthropicTool[] }
+toOpenAI(result)          // { system: string, tools: { type: 'function', function }[] }
+toOpenAIResponses(result) // { instructions: string, tools: OpenAIResponsesTool[] }
+toBedrock(result)         // { system: BedrockSystemBlock[], toolConfig: { tools } }
+toGemini(result)          // { systemInstruction: GeminiContent, tools: GeminiTool[] }
 ```
+
+| 格式化器 | 覆盖的供应商 |
+|----------|-------------|
+| `toAnthropic()` | Anthropic (1P) |
+| `toOpenAI()` | OpenAI、Azure OpenAI、Mistral、Groq、Together、DeepSeek、Fireworks、Cohere v2 |
+| `toOpenAIResponses()` | OpenAI Responses API |
+| `toBedrock()` | AWS Bedrock（Claude、Llama、Mistral、Cohere —— 统一的 Converse API）|
+| `toGemini()` | Google Gemini、Google Vertex AI |
 
 ### 独立工具函数
 
