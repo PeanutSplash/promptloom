@@ -1,10 +1,11 @@
 /**
- * promptloom — Token estimation utilities
+ * promptloom — Token estimation and budget utilities
  *
  * Mirrors Claude Code's token counting strategy:
  * - Rough estimation based on byte length (fast, no API call)
  * - File-type-aware estimation (JSON is denser → 2 bytes/token)
  * - Budget tracking with diminishing returns detection
+ * - Natural language budget parsing (+500k, spend 2M tokens)
  */
 
 import type { TokenBudgetConfig } from './types.ts'
@@ -118,4 +119,52 @@ export function checkBudget(
     pct,
     nudgeMessage: `Stopped at ${pct}% of token target (${fmt(currentTokens)} / ${fmt(budget)}). Keep working — do not summarize.`,
   }
+}
+
+// ─── Token Budget Parsing ────────────────────────────────────────
+
+/**
+ * Parse a token budget from natural language.
+ *
+ * Mirrors Claude Code's `parseTokenBudget()` from `src/utils/tokenBudget.ts`.
+ *
+ * Supported syntaxes:
+ * - Shorthand at start: "+500k", "+2M", "+1.5b"
+ * - Shorthand at end:   "do this task. +500k."
+ * - Verbose:            "use 500k tokens", "spend 2M tokens"
+ *
+ * @returns The parsed budget in tokens, or null if no budget found.
+ *
+ * @example
+ * parseTokenBudget('+500k')           // 500_000
+ * parseTokenBudget('spend 2M tokens') // 2_000_000
+ * parseTokenBudget('+1.5b')           // 1_500_000_000
+ * parseTokenBudget('hello world')     // null
+ */
+export function parseTokenBudget(text: string): number | null {
+  const MULTIPLIERS: Record<string, number> = {
+    k: 1_000,
+    m: 1_000_000,
+    b: 1_000_000_000,
+  }
+
+  // Shorthand at start: +500k
+  const startMatch = text.match(/^\s*\+(\d+(?:\.\d+)?)\s*(k|m|b)\b/i)
+  if (startMatch) {
+    return parseFloat(startMatch[1]!) * MULTIPLIERS[startMatch[2]!.toLowerCase()]!
+  }
+
+  // Shorthand at end: ... do this. +500k.
+  const endMatch = text.match(/\s\+(\d+(?:\.\d+)?)\s*(k|m|b)\s*[.!?]?\s*$/i)
+  if (endMatch) {
+    return parseFloat(endMatch[1]!) * MULTIPLIERS[endMatch[2]!.toLowerCase()]!
+  }
+
+  // Verbose: use 500k tokens / spend 2M tokens
+  const verboseMatch = text.match(/\b(?:use|spend)\s+(\d+(?:\.\d+)?)\s*(k|m|b)\s*tokens?\b/i)
+  if (verboseMatch) {
+    return parseFloat(verboseMatch[1]!) * MULTIPLIERS[verboseMatch[2]!.toLowerCase()]!
+  }
+
+  return null
 }

@@ -1,20 +1,54 @@
 /**
  * promptloom — Core type definitions
  *
- * Inspired by Claude Code's prompt architecture:
- * - Sections are the building blocks of a system prompt
- * - Cache boundaries split static (globally cacheable) from dynamic content
- * - Tools carry their own prompt descriptions
- * - Token budgets drive compression decisions
+ * The type system for a prompt compiler:
+ * - Sections with conditional inclusion
+ * - Multi-zone cache scoping
+ * - Tools with deferred loading
+ * - Token budgeting
+ * - Multi-provider output
  */
+
+// ─── Compile Context ─────────────────────────────────────────────
+
+/**
+ * Context passed to compile() for conditional section evaluation.
+ *
+ * In Claude Code, sections are gated on feature flags, model capabilities,
+ * and user type. CompileContext is the generic equivalent.
+ */
+export interface CompileContext {
+  /** Current model name (e.g., 'claude-opus-4-6') */
+  model?: string
+  /** API provider (e.g., 'anthropic', 'bedrock', 'vertex', 'openai') */
+  provider?: string
+  /** Allow arbitrary user-defined context */
+  [key: string]: unknown
+}
 
 // ─── Section Types ───────────────────────────────────────────────
 
 /** A compute function that returns a section's content, or null to skip */
 export type ComputeFn = () => string | null | Promise<string | null>
 
+/** Predicate for conditional section inclusion */
+export type WhenPredicate = (ctx: CompileContext) => boolean
+
 /** Cache scope for prompt blocks, matching Anthropic API semantics */
 export type CacheScope = 'global' | 'org' | null
+
+/**
+ * Options for section creation.
+ */
+export interface SectionOptions {
+  /**
+   * Conditional predicate. Section is only included when this returns true.
+   *
+   * In Claude Code, this maps to `feature('FLAG')` and `process.env.USER_TYPE` checks
+   * that gate sections like TOKEN_BUDGET, KAIROS, VERIFICATION_AGENT.
+   */
+  when?: WhenPredicate
+}
 
 /**
  * A prompt section — the atomic unit of prompt assembly.
@@ -22,6 +56,7 @@ export type CacheScope = 'global' | 'org' | null
  * Sections can be:
  * - Static: content is computed once and cached for the session
  * - Dynamic (cacheBreak: true): recomputed every time compile() is called
+ * - Conditional: only included when `when(context)` returns true
  */
 export interface Section {
   /** Unique identifier for this section */
@@ -30,9 +65,28 @@ export interface Section {
   compute: ComputeFn
   /** If true, this section is recomputed every compile() call */
   cacheBreak: boolean
-  /** Priority for ordering (lower = earlier). Default: insertion order */
-  priority?: number
+  /** If provided, section is only included when predicate returns true */
+  when?: WhenPredicate
 }
+
+// ─── Zone Types ──────────────────────────────────────────────────
+
+/**
+ * A zone marker in the entry list.
+ *
+ * Zones create cache block boundaries. All sections between two zone markers
+ * are compiled into a single CacheBlock with the zone's scope.
+ *
+ * In Claude Code, this is implemented via `SYSTEM_PROMPT_DYNAMIC_BOUNDARY`
+ * (a single boundary producing 2 zones). promptloom generalizes to N zones.
+ */
+export interface ZoneMarker {
+  readonly __type: 'zone'
+  scope: CacheScope
+}
+
+/** An entry in the compiler's internal list */
+export type Entry = Section | ZoneMarker
 
 // ─── Cache Block Types ───────────────────────────────────────────
 
@@ -74,8 +128,22 @@ export interface ToolDef {
   concurrencySafe?: boolean
   /** If true, this tool only reads and never writes */
   readOnly?: boolean
-  /** If true, the tool schema is deferred (not loaded until needed) */
+  /**
+   * If true, the tool schema is deferred (not loaded until model requests it).
+   *
+   * In Claude Code, deferred tools get `defer_loading: true` in their schema
+   * and are discovered via ToolSearchTool on demand. This reduces system prompt
+   * token cost when you have many tools.
+   */
   deferred?: boolean
+  /**
+   * Explicit ordering for cache stability.
+   * Lower numbers come first. Tools without order use insertion order.
+   *
+   * In Claude Code, tool order is kept stable to maximize prompt cache hits —
+   * reordering tools changes the serialized bytes, breaking the cache.
+   */
+  order?: number
 }
 
 /**
@@ -86,6 +154,8 @@ export interface CompiledTool {
   description: string
   input_schema: JsonSchema
   cache_control?: { type: 'ephemeral'; scope?: CacheScope }
+  /** When true, the model must explicitly request this tool via tool search */
+  defer_loading?: true
 }
 
 // ─── Token Types ─────────────────────────────────────────────────
@@ -93,9 +163,11 @@ export interface CompiledTool {
 export interface TokenEstimate {
   /** Total estimated tokens for system prompt */
   systemPrompt: number
-  /** Total estimated tokens for all tool schemas */
+  /** Total estimated tokens for inline (non-deferred) tool schemas */
   tools: number
-  /** Combined total */
+  /** Total estimated tokens for deferred tool schemas */
+  deferredTools: number
+  /** Combined total (systemPrompt + tools, deferred excluded) */
   total: number
 }
 
@@ -111,23 +183,32 @@ export interface TokenBudgetConfig {
 // ─── Compiler Options ────────────────────────────────────────────
 
 export interface CompilerOptions {
-  /** Default cache scope for sections before the boundary (default: 'org') */
+  /** Default cache scope for the initial zone (default: 'org') */
   defaultCacheScope?: CacheScope
-  /** Cache scope for sections after the boundary (default: null) */
+  /** Cache scope used by boundary() for the dynamic zone (default: null) */
   dynamicCacheScope?: CacheScope
   /** Bytes per token for rough estimation (default: 4) */
   bytesPerToken?: number
-  /** Whether to enable the global cache boundary feature */
+  /**
+   * When true, the initial zone scope is upgraded to 'global'.
+   * Only effective for 1P Anthropic API usage.
+   */
   enableGlobalCache?: boolean
 }
 
 export interface CompileResult {
-  /** Prompt blocks with cache annotations */
+  /** Prompt blocks with cache annotations, one per zone */
   blocks: CacheBlock[]
-  /** Compiled tool schemas */
+  /** Inline tool schemas (non-deferred) with resolved prompts */
   tools: CompiledTool[]
+  /** Deferred tool schemas (loaded on demand) */
+  deferredTools: CompiledTool[]
   /** Token estimates */
   tokens: TokenEstimate
   /** The full system prompt as a single string (blocks joined) */
   text: string
 }
+
+// ─── Provider Types ──────────────────────────────────────────────
+
+export type ProviderFormat = 'anthropic' | 'openai' | 'bedrock'

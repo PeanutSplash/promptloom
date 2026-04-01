@@ -27,9 +27,14 @@ async function runDemo() {
   console.log(bold('\n  promptloom — Prompt Compiler Demo\n'))
   console.log(dim('  Simulating Claude Code\'s 7-layer prompt assembly pattern\n'))
 
-  const pc = new PromptCompiler({ enableGlobalCache: true })
+  const pc = new PromptCompiler()
 
-  // Layer 1-6: Static sections (before cache boundary)
+  // ── Zone 1: Attribution header (no cache) ──
+  pc.zone(null)
+  pc.static('attribution', 'x-billing-org: org-demo-123')
+
+  // ── Zone 2: Static layers (globally cacheable) ──
+  pc.zone('global')
   pc.static('identity', [
     '# Identity',
     'You are Claude Code, an AI coding assistant.',
@@ -70,10 +75,8 @@ async function runDemo() {
     '- Only use emojis if explicitly requested.',
   ].join('\n'))
 
-  // Cache boundary
-  pc.boundary()
-
-  // Layer 7+: Dynamic sections (after cache boundary)
+  // ── Zone 3: Dynamic context (no cache, session-specific) ──
+  pc.zone(null)
   pc.dynamic('env', async () => [
     '# Environment',
     `- Working directory: ${process.cwd()}`,
@@ -100,7 +103,16 @@ async function runDemo() {
     '- Style: functional, minimal comments',
   ].join('\n'))
 
-  // Tools with embedded prompts
+  // Conditional section (only included for Opus models)
+  pc.static('thinking_guide', [
+    '# Extended Thinking',
+    '- Use chain-of-thought for complex reasoning.',
+    '- Show your work step by step.',
+  ].join('\n'), {
+    when: (ctx) => (ctx.model as string)?.includes('opus') ?? false,
+  })
+
+  // ── Tools (inline + deferred) ──
   pc.tool({
     name: 'Bash',
     prompt: [
@@ -176,8 +188,8 @@ async function runDemo() {
     const icon =
       s.type === 'static' ? green('STATIC ') :
       s.type === 'dynamic' ? yellow('DYNAMIC') :
-      magenta('───────')
-    const label = s.type === 'boundary' ? dim('cache boundary') : s.name
+      magenta('ZONE   ')
+    const label = s.type === 'zone' ? dim(s.name) : s.name
     console.log(`  ${icon}  ${label}`)
   }
 

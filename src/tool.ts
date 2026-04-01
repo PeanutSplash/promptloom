@@ -6,6 +6,7 @@
  * - Computed once per session and cached (avoids mid-session drift)
  * - Injected into the tool's `description` field in the API request
  * - Can be static strings or async functions
+ * - Optionally deferred (loaded on demand via ToolSearchTool)
  *
  * This module provides the tool registry and compilation logic.
  */
@@ -62,6 +63,7 @@ async function resolveToolPrompt(prompt: ToolDef['prompt']): Promise<string> {
  * Compile a single tool definition into API-ready format.
  *
  * Uses session-level cache: first call computes, subsequent calls return cached.
+ * Deferred tools get `defer_loading: true` in their schema.
  */
 export async function compileTool(
   def: ToolDef,
@@ -81,6 +83,7 @@ export async function compileTool(
     ...(cacheScope !== undefined && cacheScope !== null
       ? { cache_control: { type: 'ephemeral' as const, scope: cacheScope } }
       : {}),
+    ...(def.deferred ? { defer_loading: true as const } : {}),
   }
 
   cache.set(key, compiled)
@@ -89,13 +92,18 @@ export async function compileTool(
 
 /**
  * Compile all tool definitions, resolving prompts in parallel.
+ *
+ * Tools are sorted by explicit `order` field first, then by insertion order.
+ * This ensures stable serialization for prompt cache hits.
  */
 export async function compileTools(
   defs: ToolDef[],
   cache: ToolCache,
   cacheScope?: CacheScope,
 ): Promise<CompiledTool[]> {
-  return Promise.all(defs.map((def) => compileTool(def, cache, cacheScope)))
+  // Sort by explicit order (stable sort preserves insertion order for equal keys)
+  const sorted = [...defs].sort((a, b) => (a.order ?? Infinity) - (b.order ?? Infinity))
+  return Promise.all(sorted.map((def) => compileTool(def, cache, cacheScope)))
 }
 
 // ─── Tool Builder Helpers ────────────────────────────────────────

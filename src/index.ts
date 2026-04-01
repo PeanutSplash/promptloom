@@ -10,33 +10,35 @@
  * ```ts
  * import { PromptCompiler } from 'promptloom'
  *
- * const pc = new PromptCompiler({ enableGlobalCache: true })
+ * const pc = new PromptCompiler()
  *
- * // Static sections (cached for the session)
- * pc.static('identity', 'You are a helpful coding assistant.')
+ * pc.zone(null)                                      // no-cache header
+ * pc.static('header', 'x-model: claude')
+ *
+ * pc.zone('global')                                  // globally cacheable
+ * pc.static('identity', 'You are a coding assistant.')
  * pc.static('rules', 'Follow clean code principles.')
  *
- * // Cache boundary — everything above is globally cacheable
- * pc.boundary()
+ * pc.zone(null)                                      // session-specific
+ * pc.dynamic('context', async () => `Branch: main`)
+ * pc.static('opus_only', 'Use extended thinking.', {
+ *   when: (ctx) => ctx.model?.includes('opus'),
+ * })
  *
- * // Dynamic sections (recomputed every compile())
- * pc.dynamic('context', async () => `Branch: ${await getBranch()}`)
- *
- * // Tools with embedded prompts
  * pc.tool({
  *   name: 'read_file',
  *   prompt: 'Read a file. Always use absolute paths.',
- *   inputSchema: {
- *     type: 'object',
- *     properties: { path: { type: 'string' } },
- *     required: ['path'],
- *   },
+ *   inputSchema: { type: 'object', properties: { path: { type: 'string' } } },
  * })
  *
- * const result = await pc.compile()
- * // result.blocks  → CacheBlock[] with scope annotations
- * // result.tools   → CompiledTool[] with resolved prompts
- * // result.tokens  → { systemPrompt, tools, total }
+ * pc.tool({
+ *   name: 'web_search',
+ *   prompt: 'Search the web.',
+ *   inputSchema: { type: 'object', properties: { query: { type: 'string' } } },
+ *   deferred: true,    // loaded on demand, not in system prompt
+ * })
+ *
+ * const result = await pc.compile({ model: 'claude-opus-4-6' })
  * ```
  */
 
@@ -46,8 +48,11 @@ export { PromptCompiler } from './compiler.ts'
 // Section helpers
 export { section, dynamicSection, SectionCache, resolveSections } from './section.ts'
 
-// Cache boundary
-export { CACHE_BOUNDARY, splitAtBoundary, toAnthropicBlocks } from './boundary.ts'
+// Cache boundary (low-level utility, kept for backward compat)
+export { CACHE_BOUNDARY, splitAtBoundary } from './boundary.ts'
+
+// Provider formatters
+export { toAnthropic, toOpenAI, toBedrock, toAnthropicBlocks } from './providers.ts'
 
 // Tool helpers
 export { defineTool, ToolCache, compileTool, compileTools } from './tool.ts'
@@ -58,14 +63,20 @@ export {
   estimateTokensForFileType,
   createBudgetTracker,
   checkBudget,
+  parseTokenBudget,
 } from './tokens.ts'
 
 // Types
 export type {
   Section,
   ComputeFn,
+  WhenPredicate,
   CacheScope,
   CacheBlock,
+  CompileContext,
+  SectionOptions,
+  ZoneMarker,
+  Entry,
   ToolDef,
   CompiledTool,
   JsonSchema,
@@ -73,6 +84,14 @@ export type {
   TokenBudgetConfig,
   CompilerOptions,
   CompileResult,
+  ProviderFormat,
 } from './types.ts'
 export type { BudgetTracker, BudgetDecision } from './tokens.ts'
 export type { SplitOptions } from './boundary.ts'
+export type {
+  AnthropicTextBlock,
+  AnthropicTool,
+  OpenAITool,
+  BedrockTextBlock,
+  BedrockTool,
+} from './providers.ts'

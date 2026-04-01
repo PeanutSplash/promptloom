@@ -1,55 +1,62 @@
 /**
  * promptloom — The Prompt Compiler
  *
- * Implements Claude Code's 7-layer prompt assembly pattern:
+ * Implements Claude Code's prompt assembly pattern, generalized:
  *
- *  1. Static sections (identity, rules, tool usage guides...)
- *  2. Cache boundary ← splits globally-cacheable from session-specific
- *  3. Dynamic sections (git status, memory, MCP instructions...)
- *  4. Tool schemas with embedded prompts
- *  5. Section-level caching (static computed once, dynamic every turn)
+ *  1. Multi-zone cache scoping (N blocks, not just 2)
+ *  2. Conditional section inclusion (when predicates)
+ *  3. Static/dynamic section caching
+ *  4. Tool schemas with embedded prompts and deferred loading
+ *  5. Stable tool ordering for cache hits
  *  6. Token estimation and budget tracking
- *  7. Cache scope annotations for the Anthropic API
  *
  * Usage:
  *
  *   const pc = new PromptCompiler()
  *
- *   pc.static('identity', 'You are a helpful coding assistant.')
+ *   // Zone 1: no-cache header
+ *   pc.zone(null)
+ *   pc.static('attribution', 'x-model: claude')
+ *
+ *   // Zone 2: globally cacheable
+ *   pc.zone('global')
+ *   pc.static('identity', 'You are a coding assistant.')
  *   pc.static('rules', () => loadRules())
- *   pc.boundary()                            // cache split point
+ *
+ *   // Zone 3: session-specific
+ *   pc.zone(null)
  *   pc.dynamic('git', async () => gitStatus())
- *   pc.dynamic('memory', async () => loadMemory())
+ *   pc.static('opus_only', 'Use extended thinking.', {
+ *     when: (ctx) => ctx.model?.includes('opus'),
+ *   })
  *
+ *   // Tools
  *   pc.tool({ name: 'bash', prompt: '...', inputSchema: {...} })
+ *   pc.tool({ name: 'rare_tool', prompt: '...', inputSchema: {...}, deferred: true })
  *
- *   const result = await pc.compile()
- *   // result.blocks  → CacheBlock[] (with cache scope annotations)
- *   // result.tools   → CompiledTool[] (with resolved prompts)
- *   // result.tokens  → { systemPrompt, tools, total }
- *   // result.text    → full prompt as a single string
+ *   const result = await pc.compile({ model: 'claude-opus-4-6' })
  */
 
 import type {
   CacheBlock,
   CacheScope,
+  CompileContext,
   CompileResult,
   CompilerOptions,
   ComputeFn,
+  Entry,
   Section,
+  SectionOptions,
   TokenEstimate,
   ToolDef,
+  ZoneMarker,
 } from './types.ts'
 import { SectionCache, resolveSections } from './section.ts'
-import { CACHE_BOUNDARY, splitAtBoundary } from './boundary.ts'
 import { ToolCache, compileTools } from './tool.ts'
 import { estimateTokens } from './tokens.ts'
 
-/** Sentinel value representing a cache boundary in the section list */
-const BOUNDARY_SECTION_NAME = '__boundary__'
-
 export class PromptCompiler {
-  private sections: Section[] = []
+  private entries: Entry[] = []
   private tools: ToolDef[] = []
   private sectionCache: SectionCache
   private toolCache: ToolCache
@@ -66,16 +73,57 @@ export class PromptCompiler {
     this.toolCache = new ToolCache()
   }
 
+  // ─── Zone API ────────────────────────────────────────────────
+
+  /**
+   * Start a new cache zone. All sections after this marker are compiled
+   * into a single CacheBlock with the specified scope.
+   *
+   * Generalizes Claude Code's `SYSTEM_PROMPT_DYNAMIC_BOUNDARY` to support
+   * N zones instead of just 2.
+   *
+   * @example
+   * pc.zone(null)      // no-cache zone (attribution, headers)
+   * pc.zone('global')  // globally cacheable (identity, rules)
+   * pc.zone('org')     // org-level cacheable
+   * pc.zone(null)      // session-specific (dynamic context)
+   */
+  zone(scope: CacheScope): this {
+    this.entries.push({ __type: 'zone', scope })
+    return this
+  }
+
+  /**
+   * Insert a cache boundary. Shorthand for starting a new zone with
+   * `dynamicCacheScope` (default: null).
+   *
+   * Equivalent to Claude Code's `SYSTEM_PROMPT_DYNAMIC_BOUNDARY`.
+   * Only effective when `enableGlobalCache` is true (otherwise a no-op
+   * since there's no scope difference to split on).
+   *
+   * For explicit multi-zone control, use `zone()` instead.
+   */
+  boundary(): this {
+    if (this.options.enableGlobalCache) {
+      return this.zone(this.options.dynamicCacheScope)
+    }
+    // When global cache is disabled, boundary is a no-op
+    // (all sections use defaultCacheScope anyway)
+    return this
+  }
+
   // ─── Section API ─────────────────────────────────────────────
 
   /**
    * Add a static section. Computed once and cached for the session.
    *
    * Equivalent to Claude Code's `systemPromptSection()`.
+   *
+   * @param options.when - Conditional predicate. Section is skipped when false.
    */
-  static(name: string, content: string | ComputeFn): this {
+  static(name: string, content: string | ComputeFn, options?: SectionOptions): this {
     const compute = typeof content === 'string' ? () => content : content
-    this.sections.push({ name, compute, cacheBreak: false })
+    this.entries.push({ name, compute, cacheBreak: false, when: options?.when })
     return this
   }
 
@@ -83,26 +131,11 @@ export class PromptCompiler {
    * Add a dynamic section. Recomputed every compile() call.
    *
    * Equivalent to Claude Code's `DANGEROUS_uncachedSystemPromptSection()`.
-   * The "dangerous" naming in Claude Code reflects that these sections
-   * break prompt cache stability — use sparingly.
-   */
-  dynamic(name: string, compute: ComputeFn): this {
-    this.sections.push({ name, compute, cacheBreak: true })
-    return this
-  }
-
-  /**
-   * Insert a cache boundary. Everything before this is globally cacheable.
    *
-   * Equivalent to Claude Code's `SYSTEM_PROMPT_DYNAMIC_BOUNDARY`.
-   * Only effective when `enableGlobalCache` is true.
+   * @param options.when - Conditional predicate. Section is skipped when false.
    */
-  boundary(): this {
-    this.sections.push({
-      name: BOUNDARY_SECTION_NAME,
-      compute: () => (this.options.enableGlobalCache ? CACHE_BOUNDARY : null),
-      cacheBreak: false,
-    })
+  dynamic(name: string, compute: ComputeFn, options?: SectionOptions): this {
+    this.entries.push({ name, compute, cacheBreak: true, when: options?.when })
     return this
   }
 
@@ -111,8 +144,11 @@ export class PromptCompiler {
   /**
    * Register a tool with an embedded prompt.
    *
-   * The tool's prompt is resolved once per session (cached),
-   * mirroring Claude Code's tool schema cache.
+   * Tools with `deferred: true` are compiled separately and excluded
+   * from the main tool list. They can be discovered on demand.
+   *
+   * Tools with `order` fields are sorted for stable serialization
+   * (cache hit optimization).
    */
   tool(def: ToolDef): this {
     this.tools.push(def)
@@ -122,59 +158,70 @@ export class PromptCompiler {
   // ─── Compile ─────────────────────────────────────────────────
 
   /**
-   * Compile the prompt: resolve all sections, split at boundary,
-   * compile tools, and estimate tokens.
+   * Compile the prompt: resolve sections per zone, compile tools,
+   * separate deferred tools, and estimate tokens.
+   *
+   * @param context - Optional context for conditional section evaluation.
+   *                  Sections with `when` predicates are evaluated against this.
    */
-  async compile(): Promise<CompileResult> {
-    // 1. Resolve all sections (static from cache, dynamic freshly computed)
-    const resolved = await resolveSections(this.sections, this.sectionCache)
+  async compile(context?: CompileContext): Promise<CompileResult> {
+    // 1. Group entries into zones
+    const zoneGroups = this.groupIntoZones()
 
-    // 2. Join into a single string (nulls filtered out, joined with double newline)
-    const fullText = resolved
-      .filter((s): s is string => s !== null)
-      .join('\n\n')
+    // 2. Resolve each zone's sections → CacheBlock[]
+    const blocks: CacheBlock[] = []
+    for (const group of zoneGroups) {
+      const resolved = await resolveSections(group.sections, this.sectionCache, context)
+      const text = resolved.filter((s): s is string => s !== null).join('\n\n')
+      if (text) {
+        blocks.push({ text, cacheScope: group.scope })
+      }
+    }
 
-    // 3. Split at cache boundary into annotated blocks
-    const blocks = splitAtBoundary(fullText, {
-      staticScope: this.options.enableGlobalCache ? 'global' : this.options.defaultCacheScope,
-      dynamicScope: this.options.dynamicCacheScope,
-      fallbackScope: this.options.defaultCacheScope,
-    })
+    // 3. Separate inline vs deferred tools
+    const inlineToolDefs = this.tools.filter((t) => !t.deferred)
+    const deferredToolDefs = this.tools.filter((t) => t.deferred)
 
-    // 4. Compile tools (prompts resolved and cached)
-    const compiledTools = await compileTools(this.tools, this.toolCache)
+    // 4. Compile tools (prompts resolved and cached, sorted by order)
+    const compiledTools = await compileTools(inlineToolDefs, this.toolCache)
+    const compiledDeferred = await compileTools(deferredToolDefs, this.toolCache)
 
     // 5. Estimate tokens
+    const bpt = this.options.bytesPerToken
     const systemPromptTokens = blocks.reduce(
-      (sum, b) => sum + estimateTokens(b.text, this.options.bytesPerToken),
+      (sum, b) => sum + estimateTokens(b.text, bpt),
       0,
     )
     const toolTokens = compiledTools.reduce(
-      (sum, t) =>
-        sum +
-        estimateTokens(t.description, this.options.bytesPerToken) +
-        estimateTokens(JSON.stringify(t.input_schema), 2), // schemas are dense like JSON
+      (sum, t) => sum + this.estimateToolTokens(t),
+      0,
+    )
+    const deferredToolTokens = compiledDeferred.reduce(
+      (sum, t) => sum + this.estimateToolTokens(t),
       0,
     )
     const tokens: TokenEstimate = {
       systemPrompt: systemPromptTokens,
       tools: toolTokens,
+      deferredTools: deferredToolTokens,
       total: systemPromptTokens + toolTokens,
     }
 
-    // 6. Build the plain text version (no boundary markers)
+    // 6. Build the plain text version
     const text = blocks.map((b) => b.text).join('\n\n')
 
-    return { blocks, tools: compiledTools, tokens, text }
+    return {
+      blocks,
+      tools: compiledTools,
+      deferredTools: compiledDeferred,
+      tokens,
+      text,
+    }
   }
 
   // ─── Cache Management ────────────────────────────────────────
 
-  /**
-   * Clear all caches. Call on `/clear` or `/compact`.
-   *
-   * Mirrors Claude Code's `clearSystemPromptSections()`.
-   */
+  /** Clear all caches. Call on `/clear` or `/compact`. */
   clearCache(): void {
     this.sectionCache.clear()
     this.toolCache.clear()
@@ -194,29 +241,75 @@ export class PromptCompiler {
 
   /** Get the number of registered sections */
   get sectionCount(): number {
-    return this.sections.filter((s) => s.name !== BOUNDARY_SECTION_NAME).length
+    return this.entries.filter((e): e is Section => !('__type' in e)).length
   }
 
-  /** Get the number of registered tools */
+  /** Get the number of registered tools (inline + deferred) */
   get toolCount(): number {
     return this.tools.length
   }
 
   /** List registered section names with their types */
-  listSections(): Array<{ name: string; type: 'static' | 'dynamic' | 'boundary' }> {
-    return this.sections.map((s) => ({
-      name: s.name,
-      type:
-        s.name === BOUNDARY_SECTION_NAME
-          ? 'boundary' as const
-          : s.cacheBreak
-            ? 'dynamic' as const
-            : 'static' as const,
-    }))
+  listSections(): Array<{ name: string; type: 'static' | 'dynamic' | 'zone' }> {
+    return this.entries.map((e) => {
+      if ('__type' in e) {
+        return { name: `zone:${e.scope ?? 'none'}`, type: 'zone' as const }
+      }
+      return {
+        name: e.name,
+        type: e.cacheBreak ? 'dynamic' as const : 'static' as const,
+      }
+    })
   }
 
   /** List registered tool names */
   listTools(): string[] {
     return this.tools.map((t) => t.name)
+  }
+
+  // ─── Internal ────────────────────────────────────────────────
+
+  /**
+   * Group entries into zones.
+   *
+   * Entries before any zone marker belong to the "initial zone" whose
+   * scope is determined by `enableGlobalCache` and `defaultCacheScope`.
+   */
+  private groupIntoZones(): Array<{ scope: CacheScope; sections: Section[] }> {
+    const initialScope = this.options.enableGlobalCache
+      ? 'global'
+      : this.options.defaultCacheScope
+
+    const zones: Array<{ scope: CacheScope; sections: Section[] }> = []
+    let currentZone: { scope: CacheScope; sections: Section[] } = {
+      scope: initialScope,
+      sections: [],
+    }
+
+    for (const entry of this.entries) {
+      if ('__type' in entry) {
+        // Zone marker: finalize current zone and start a new one
+        if (currentZone.sections.length > 0) {
+          zones.push(currentZone)
+        }
+        currentZone = { scope: entry.scope, sections: [] }
+      } else {
+        currentZone.sections.push(entry)
+      }
+    }
+
+    // Don't forget the last zone
+    if (currentZone.sections.length > 0) {
+      zones.push(currentZone)
+    }
+
+    return zones
+  }
+
+  private estimateToolTokens(tool: { description: string; input_schema: Record<string, unknown> }): number {
+    return (
+      estimateTokens(tool.description, this.options.bytesPerToken) +
+      estimateTokens(JSON.stringify(tool.input_schema), 2) // schemas are dense
+    )
   }
 }

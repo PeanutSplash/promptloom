@@ -5,11 +5,11 @@
  * - `section()`: cached within session, computed once
  * - `dynamicSection()`: recomputed every compile() call (cacheBreak: true)
  *
- * Sections also support an in-memory cache with optional TTL,
- * mirroring Claude Code's `systemPromptSectionCache`.
+ * Extended with conditional inclusion via `when` predicates,
+ * mirroring Claude Code's `feature()` and `process.env.USER_TYPE` gates.
  */
 
-import type { ComputeFn, Section } from './types.ts'
+import type { CompileContext, ComputeFn, Section, SectionOptions, WhenPredicate } from './types.ts'
 
 /**
  * Create a static section. Content is computed once and cached.
@@ -17,8 +17,8 @@ import type { ComputeFn, Section } from './types.ts'
  * Use for: identity prompts, rules, style guides — anything that
  * doesn't change between turns.
  */
-export function section(name: string, compute: ComputeFn): Section {
-  return { name, compute, cacheBreak: false }
+export function section(name: string, compute: ComputeFn, options?: SectionOptions): Section {
+  return { name, compute, cacheBreak: false, when: options?.when }
 }
 
 /**
@@ -30,8 +30,8 @@ export function section(name: string, compute: ComputeFn): Section {
  * Use for: MCP server instructions, real-time status, anything that
  * changes between turns.
  */
-export function dynamicSection(name: string, compute: ComputeFn): Section {
-  return { name, compute, cacheBreak: true }
+export function dynamicSection(name: string, compute: ComputeFn, options?: SectionOptions): Section {
+  return { name, compute, cacheBreak: true, when: options?.when }
 }
 
 // ─── Section Cache ───────────────────────────────────────────────
@@ -71,6 +71,7 @@ export class SectionCache {
  * Resolve an array of sections, using cache for static ones.
  *
  * Mirrors `resolveSystemPromptSections()` from Claude Code:
+ * - Sections with a `when` predicate are filtered by compile context
  * - Static sections: check cache first, compute if missing
  * - Dynamic sections: always recompute
  * - All sections resolved in parallel via Promise.all
@@ -78,9 +79,14 @@ export class SectionCache {
 export async function resolveSections(
   sections: Section[],
   cache: SectionCache,
+  context?: CompileContext,
 ): Promise<(string | null)[]> {
+  // Filter by when predicate
+  const ctx = context ?? {}
+  const active = sections.filter((s) => !s.when || s.when(ctx))
+
   return Promise.all(
-    sections.map(async (s) => {
+    active.map(async (s) => {
       // Dynamic sections always recompute
       if (!s.cacheBreak && cache.has(s.name)) {
         return cache.get(s.name) ?? null
