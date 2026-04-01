@@ -1,8 +1,21 @@
+<div align="center">
+
 # promptloom
 
-为 LLM 应用编织生产级提示词 —— 多区域缓存、条件段、工具注入、延迟加载、Token 预算，一步到位。
+**为 LLM 应用编织生产级提示词 —— 多区域缓存、工具注入、Token 预算，一步到位。**
 
 从 [Claude Code](https://claude.ai/code) 的 7 层提示词架构逆向工程而来 —— 这正是 Anthropic 内部用来组装其 51 万行 CLI 工具系统提示词的模式。
+
+[![npm version](https://img.shields.io/npm/v/promptloom?color=f97316)](https://www.npmjs.com/package/promptloom)
+[![license](https://img.shields.io/npm/l/promptloom?color=22c55e)](./LICENSE)
+[![TypeScript](https://img.shields.io/badge/TypeScript-first-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![zero deps](https://img.shields.io/badge/dependencies-0-10b981)](./package.json)
+
+[快速上手](#快速上手) | [文档](#核心概念) | [API 参考](#api-参考) | [English](./README.md) | [LLM 文档](https://raw.githubusercontent.com/PeanutSplash/promptloom/main/llms.txt)
+
+</div>
+
+---
 
 ## 为什么需要它
 
@@ -10,38 +23,65 @@
 
 **promptloom** 把这些经过生产验证的模式提炼成零依赖库。
 
-| 痛点 | promptloom 的解法 |
-|------|-------------------|
-| 改一段提示词就破坏整个缓存 → 白花钱 | **多区域缓存** —— 每个 zone 有独立的缓存范围（`global`、`org`、`null`）|
-| 工具描述散落各处，难以管理 | **工具注册表**，会话级缓存 + 稳定排序 |
-| 工具太多撑爆系统提示词 | **延迟工具** —— 标记为 deferred 的工具不进提示词，按需加载 |
-| 某些段只和特定模型/环境相关 | **条件段** —— `when` 谓词按编译上下文决定是否包含 |
-| 不知道提示词花了多少 Token | 每次 `compile()` 自动输出 **Token 估算** |
-| 不同 API 提供商格式不同 | **多 Provider 输出** —— `toAnthropic()`、`toOpenAI()`、`toOpenAIResponses()`、`toBedrock()`、`toGemini()` |
+### 核心特性
+
+- **多区域缓存** —— 每个 zone 有独立的缓存范围（`global`、`org`、`null`），改一个区不会破坏其他区的缓存
+- **工具注册表** —— 会话级缓存 + 稳定排序 + 延迟加载，轻松管理 40+ 工具
+- **条件段** —— `when` 谓词按模型、环境、用户类型门控
+- **Token 估算与预算** —— 每次 `compile()` 自动估算，Agent 循环支持边际收益递减检测
+- **5 种 Provider 格式** —— `toAnthropic()` / `toOpenAI()` / `toOpenAIResponses()` / `toBedrock()` / `toGemini()` 以及所有 OpenAI 兼容供应商（Groq、Together、DeepSeek、Mistral、Fireworks...）
 
 ## 安装
 
 ```bash
+# npm
+npm install promptloom
+
+# bun
 bun add promptloom
+
+# pnpm
+pnpm add promptloom
+
+# yarn
+yarn add promptloom
 ```
 
+> **环境要求：** TypeScript ^6.0（peer dependency）。零运行时依赖。
+
 ## 快速上手
+
+### For Agents
+
+把下面的链接发给你的 AI 助手，即可开始开发：
+
+```bash
+curl -s https://raw.githubusercontent.com/PeanutSplash/promptloom/main/llms.txt
+```
+
+或直接在 AI 对话中粘贴链接：
+
+```
+https://raw.githubusercontent.com/PeanutSplash/promptloom/main/llms.txt
+```
+
+### For Humans
 
 ```ts
 import { PromptCompiler, toAnthropic } from 'promptloom'
 
 const pc = new PromptCompiler()
 
-// ── Zone 1: 归属头（不缓存）──
+// Zone 1: 归属头（不缓存）
 pc.zone(null)
 pc.static('attribution', 'x-billing-org: org-123')
 
-// ── Zone 2: 静态规则（全局可缓存）──
+// Zone 2: 静态规则（全局可缓存）
 pc.zone('global')
 pc.static('identity', '你是一个代码审查机器人。')
 pc.static('rules', '只评论 Bug，不评论代码风格。')
 
-// ── Zone 3: 动态上下文（会话级，不缓存）──
+// Zone 3: 动态上下文（会话级，不缓存）
 pc.zone(null)
 pc.dynamic('diff', async () => {
   const diff = await getCurrentDiff()
@@ -53,7 +93,7 @@ pc.static('thinking', '对复杂审查使用扩展思考。', {
   when: (ctx) => ctx.model?.includes('opus') ?? false,
 })
 
-// ── 工具（内联 + 延迟）──
+// 工具（内联 + 延迟）
 pc.tool({
   name: 'post_comment',
   prompt: '在代码的指定行发布审查评论。',
@@ -66,7 +106,7 @@ pc.tool({
     },
     required: ['file', 'line', 'body'],
   },
-  order: 1, // 显式排序，保证缓存稳定性
+  order: 1,
 })
 
 pc.tool({
@@ -76,19 +116,20 @@ pc.tool({
   deferred: true, // 不进系统提示词，按需加载
 })
 
-// ── 编译（传入上下文用于条件段求值）──
+// 编译
 const result = await pc.compile({ model: 'claude-opus-4-6' })
 
 result.blocks        // CacheBlock[] — 每个 zone 一个块，带缓存范围标注
 result.tools         // CompiledTool[] — 仅内联工具
-result.deferredTools // CompiledTool[] — 延迟工具（带 defer_loading: true）
+result.deferredTools // CompiledTool[] — 延迟工具
 result.tokens        // { systemPrompt, tools, deferredTools, total }
 result.text          // 完整提示词文本
 ```
 
 ## 配合各 API 使用
 
-### Anthropic
+<details>
+<summary><b>Anthropic</b></summary>
 
 ```ts
 import Anthropic from '@anthropic-ai/sdk'
@@ -98,7 +139,7 @@ const pc = new PromptCompiler()
 // ... 添加 zone、section、tool ...
 
 const result = await pc.compile({ model: 'claude-sonnet-4-6' })
-const { system, tools } = toAnthropic(result) // 带缓存标注的 blocks + 工具 schema
+const { system, tools } = toAnthropic(result)
 
 const response = await new Anthropic().messages.create({
   model: 'claude-sonnet-4-6',
@@ -109,7 +150,10 @@ const response = await new Anthropic().messages.create({
 })
 ```
 
-### OpenAI
+</details>
+
+<details>
+<summary><b>OpenAI</b></summary>
 
 ```ts
 import OpenAI from 'openai'
@@ -119,7 +163,7 @@ const pc = new PromptCompiler()
 // ... 添加 zone、section、tool ...
 
 const result = await pc.compile()
-const { system, tools } = toOpenAI(result) // 单字符串 + function 格式工具
+const { system, tools } = toOpenAI(result)
 
 const response = await new OpenAI().chat.completions.create({
   model: 'gpt-4o',
@@ -131,18 +175,47 @@ const response = await new OpenAI().chat.completions.create({
 })
 ```
 
-### AWS Bedrock
+</details>
+
+<details>
+<summary><b>OpenAI Responses API</b></summary>
+
+```ts
+import OpenAI from 'openai'
+import { PromptCompiler, toOpenAIResponses } from 'promptloom'
+
+const pc = new PromptCompiler()
+// ... 添加 zone、section、tool ...
+
+const result = await pc.compile()
+const { instructions, tools } = toOpenAIResponses(result)
+
+const response = await new OpenAI().responses.create({
+  model: 'gpt-4o',
+  instructions,
+  input: '审查这个 PR',
+  tools,
+})
+```
+
+</details>
+
+<details>
+<summary><b>AWS Bedrock</b></summary>
 
 ```ts
 import { PromptCompiler, toBedrock } from 'promptloom'
 
 const result = await pc.compile()
-const { system, toolConfig } = toBedrock(result) // cachePoint + toolSpec 格式
+const { system, toolConfig } = toBedrock(result)
 
 // 用于 @aws-sdk/client-bedrock-runtime ConverseCommand
 ```
 
-### Google Gemini / Vertex AI
+</details>
+
+<details>
+<summary><b>Google Gemini / Vertex AI</b></summary>
 
 ```ts
 import { GoogleGenAI } from '@google/genai'
@@ -152,7 +225,7 @@ const pc = new PromptCompiler()
 // ... 添加 zone、section、tool ...
 
 const result = await pc.compile()
-const { systemInstruction, tools } = toGemini(result) // parts 数组 + functionDeclarations
+const { systemInstruction, tools } = toGemini(result)
 
 const response = await new GoogleGenAI({ apiKey: '...' }).models.generateContent({
   model: 'gemini-2.5-pro',
@@ -163,27 +236,10 @@ const response = await new GoogleGenAI({ apiKey: '...' }).models.generateContent
 
 Vertex AI 使用相同格式，只需更换客户端初始化方式。
 
-### OpenAI Responses API
+</details>
 
-```ts
-import OpenAI from 'openai'
-import { PromptCompiler, toOpenAIResponses } from 'promptloom'
-
-const pc = new PromptCompiler()
-// ... 添加 zone、section、tool ...
-
-const result = await pc.compile()
-const { instructions, tools } = toOpenAIResponses(result) // instructions 字段 + 扁平工具
-
-const response = await new OpenAI().responses.create({
-  model: 'gpt-4o',
-  instructions,
-  input: '审查这个 PR',
-  tools,
-})
-```
-
-### OpenAI 兼容供应商
+<details>
+<summary><b>OpenAI 兼容供应商（Groq、Together、DeepSeek、Mistral、Fireworks）</b></summary>
 
 `toOpenAI()` 适用于所有 OpenAI 兼容 API —— 只需更换 `baseURL`：
 
@@ -203,12 +259,14 @@ const together = new OpenAI({ baseURL: 'https://api.together.xyz/v1', apiKey: '.
 // DeepSeek
 const deepseek = new OpenAI({ baseURL: 'https://api.deepseek.com', apiKey: '...' })
 
-// Mistral（也有原生 SDK）
+// Mistral
 const mistral = new OpenAI({ baseURL: 'https://api.mistral.ai/v1', apiKey: '...' })
 
 // Fireworks AI
 const fireworks = new OpenAI({ baseURL: 'https://api.fireworks.ai/inference/v1', apiKey: '...' })
 ```
+
+</details>
 
 ## 核心概念
 
@@ -246,11 +304,9 @@ pc.dynamic('git', async () => `分支: ${await getBranch()}`)
 └─────────────────────────────┘
 ```
 
-`boundary()` 方法保留了向后兼容 —— 在 `enableGlobalCache` 为 true 时等同于 `zone(null)`。
-
 ### 条件段
 
-Claude Code 里通过 `feature('FLAG')`、`process.env.USER_TYPE`、模型能力来门控段。promptloom 用 `when` 谓词：
+按模型、环境、用户类型门控段：
 
 ```ts
 // 仅 Opus 模型
@@ -268,7 +324,6 @@ pc.static('internal_tools', '你可以访问内部 API。', {
   when: (ctx) => ctx.userType === 'internal',
 })
 
-// 谓词在编译时求值
 const result = await pc.compile({
   model: 'claude-opus-4-6',
   mcpServers: ['figma', 'slack'],
@@ -276,7 +331,9 @@ const result = await pc.compile({
 })
 ```
 
-### 工具提示词注入
+### 工具管理
+
+#### 工具提示词注入
 
 每个工具带有面向 LLM 的"使用手册"，每个会话解析一次后缓存：
 
@@ -288,37 +345,25 @@ pc.tool({
     return `执行 Shell 命令。\n${sandbox ? '在沙箱中运行。' : ''}`
   },
   inputSchema: { /* ... */ },
-  order: 1,          // 显式排序，保证缓存稳定性
+  order: 1, // 显式排序，保证缓存稳定性
 })
 ```
 
-### 延迟工具
+#### 延迟工具
 
-当工具很多时（Claude Code 有 42+），大部分每轮并不需要。延迟工具被排除在系统提示词之外，按需发现：
+当工具很多时（Claude Code 有 42+），大部分每轮并不需要：
 
 ```ts
 pc.tool({
   name: 'web_search',
   prompt: '搜索网页获取信息。',
   inputSchema: { /* ... */ },
-  deferred: true,  // 不进系统提示词，通过 tool search 按需加载
+  deferred: true, // 不进系统提示词，通过 tool search 按需加载
 })
 
 const result = await pc.compile()
 result.tools         // 仅内联工具
 result.deferredTools // 延迟工具（带 defer_loading: true）
-result.tokens.total  // 不计算延迟工具的 token
-```
-
-### 工具排序稳定性
-
-重排工具会改变序列化字节，破坏提示词缓存。用 `order` 保证确定性排序：
-
-```ts
-pc.tool({ name: 'bash', prompt: '...', inputSchema: {}, order: 1 })
-pc.tool({ name: 'read', prompt: '...', inputSchema: {}, order: 2 })
-pc.tool({ name: 'edit', prompt: '...', inputSchema: {}, order: 3 })
-// 没有 `order` 的工具排在最后，按插入顺序
 ```
 
 ### Token 预算
@@ -335,9 +380,7 @@ result.tokens.deferredTools // ~100 tokens（不计入 total）
 result.tokens.total         // ~550 tokens（systemPrompt + tools）
 ```
 
-#### 预算追踪
-
-用于长时间运行的 Agent 循环：
+#### Agent 循环预算追踪
 
 ```ts
 import { createBudgetTracker, checkBudget } from 'promptloom'
@@ -352,9 +395,7 @@ if (decision.action === 'continue') {
 }
 ```
 
-#### 从自然语言解析预算
-
-像 Claude Code 一样解析用户指定的预算：
+#### 自然语言预算解析
 
 ```ts
 import { parseTokenBudget } from 'promptloom'
@@ -376,7 +417,7 @@ parseTokenBudget('hello world')     // null
 | `static(name, content, options?)` | 添加静态段。`options.when` 用于条件包含 |
 | `dynamic(name, compute, options?)` | 添加动态段（每次 `compile()` 重算）|
 | `tool(def)` | 注册工具。`deferred: true` 按需加载，`order` 控制排序 |
-| `compile(context?)` | 编译一切 → `CompileResult`。上下文传给 `when` 谓词 |
+| `compile(context?)` | 编译一切 -> `CompileResult`。上下文传给 `when` 谓词 |
 | `clearCache()` | 清除所有段 + 工具缓存 |
 | `clearSectionCache()` | 只清除段缓存 |
 | `clearToolCache()` | 只清除工具缓存 |
@@ -397,47 +438,37 @@ parseTokenBudget('hello world')     // null
 
 ### Provider 格式化
 
-```ts
-import { toAnthropic, toOpenAI, toOpenAIResponses, toBedrock, toGemini } from 'promptloom'
-
-toAnthropic(result)       // { system: TextBlockParam[], tools: AnthropicTool[] }
-toOpenAI(result)          // { system: string, tools: { type: 'function', function }[] }
-toOpenAIResponses(result) // { instructions: string, tools: OpenAIResponsesTool[] }
-toBedrock(result)         // { system: BedrockSystemBlock[], toolConfig: { tools } }
-toGemini(result)          // { systemInstruction: GeminiContent, tools: GeminiTool[] }
-```
-
-| 格式化器 | 覆盖的供应商 |
-|----------|-------------|
-| `toAnthropic()` | Anthropic (1P) |
-| `toOpenAI()` | OpenAI、Azure OpenAI、Mistral、Groq、Together、DeepSeek、Fireworks、Cohere v2 |
-| `toOpenAIResponses()` | OpenAI Responses API |
-| `toBedrock()` | AWS Bedrock（Claude、Llama、Mistral、Cohere —— 统一的 Converse API）|
-| `toGemini()` | Google Gemini、Google Vertex AI |
+| 格式化器 | 输出 | 覆盖的供应商 |
+|----------|------|-------------|
+| `toAnthropic(result)` | `{ system, tools }` | Anthropic (1P) |
+| `toOpenAI(result)` | `{ system, tools }` | OpenAI、Azure、Groq、Together、DeepSeek、Mistral、Fireworks、Cohere v2 |
+| `toOpenAIResponses(result)` | `{ instructions, tools }` | OpenAI Responses API |
+| `toBedrock(result)` | `{ system, toolConfig }` | AWS Bedrock（Claude、Llama、Mistral、Cohere —— Converse API）|
+| `toGemini(result)` | `{ systemInstruction, tools }` | Google Gemini、Google Vertex AI |
 
 ### 独立工具函数
 
 ```ts
 import {
   // Token 估算
-  estimateTokens,           // 粗略估算（字节数 / 4）
-  estimateTokensForFileType, // 文件类型感知（JSON = 字节数 / 2）
+  estimateTokens,              // 粗略估算（字节数 / 4）
+  estimateTokensForFileType,   // 文件类型感知（JSON = 字节数 / 2）
 
   // 预算
-  createBudgetTracker,       // 创建追踪器
-  checkBudget,               // 检查预算 → 继续或停止
-  parseTokenBudget,          // 解析 "+500k" → 500_000
+  createBudgetTracker,         // 创建追踪器
+  checkBudget,                 // 检查预算 -> 继续或停止
+  parseTokenBudget,            // 解析 "+500k" -> 500_000
 
   // 底层工具（用于自定义编译器）
-  splitAtBoundary,           // 在哨兵处分割文本 → CacheBlock[]
-  section,                   // 创建静态 Section
-  dynamicSection,            // 创建动态 Section
-  defineTool,                // 创建 ToolDef（fail-closed 默认值）
-  SectionCache,              // 段缓存类
-  ToolCache,                 // 工具缓存类
-  resolveSections,           // 解析段（使用缓存）
-  compileTool,               // 编译单个工具
-  compileTools,              // 编译所有工具
+  splitAtBoundary,             // 在哨兵处分割文本 -> CacheBlock[]
+  section,                     // 创建静态 Section
+  dynamicSection,              // 创建动态 Section
+  defineTool,                  // 创建 ToolDef（fail-closed 默认值）
+  SectionCache,                // 段缓存类
+  ToolCache,                   // 工具缓存类
+  resolveSections,             // 解析段（使用缓存）
+  compileTool,                 // 编译单个工具
+  compileTools,                // 编译所有工具
 } from 'promptloom'
 ```
 
@@ -457,10 +488,27 @@ import {
 
 第 1-6 层是**静态的**（全局可缓存）。第 7 层及以后是**动态的**（会话级）。它们之间的边界是一个字面量哨兵字符串，API 层据此标注缓存范围。
 
-段通过特性标志（`feature('TOKEN_BUDGET')`）、用户类型（`process.env.USER_TYPE === 'ant'`）和模型能力条件包含。42+ 个工具中每一个都带有自己的 `prompt.ts`，超过上下文阈值的工具会被延迟（通过 `ToolSearchTool` 按需加载）。
+## 贡献
 
-promptloom 把这些原语全部交给你。
+欢迎贡献！请随时开 issue 或提交 pull request。
+
+```bash
+git clone https://github.com/PeanutSplash/promptloom.git
+cd promptloom
+bun install
+bun test          # 运行测试
+bun run dev       # 运行 CLI 演示
+bunx tsc --noEmit # 类型检查
+```
 
 ## 许可
 
-MIT
+[MIT](./LICENSE)
+
+---
+
+<div align="center">
+
+**[GitHub](https://github.com/PeanutSplash/promptloom)** | **[npm](https://www.npmjs.com/package/promptloom)** | **[LLM 文档](https://raw.githubusercontent.com/PeanutSplash/promptloom/main/llms.txt)**
+
+</div>

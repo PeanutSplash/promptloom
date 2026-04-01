@@ -1,8 +1,21 @@
+<div align="center">
+
 # promptloom
 
-Weave production-grade LLM prompts with cache boundaries, tool injection, and token budgeting.
+**Weave production-grade LLM prompts with cache boundaries, tool injection, and token budgeting.**
 
 Reverse-engineered from [Claude Code](https://claude.ai/code)'s 7-layer prompt architecture — the same patterns Anthropic uses internally to assemble system prompts for their 500K+ line CLI tool.
+
+[![npm version](https://img.shields.io/npm/v/promptloom?color=f97316)](https://www.npmjs.com/package/promptloom)
+[![license](https://img.shields.io/npm/l/promptloom?color=22c55e)](./LICENSE)
+[![TypeScript](https://img.shields.io/badge/TypeScript-first-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![zero deps](https://img.shields.io/badge/dependencies-0-10b981)](./package.json)
+
+[Quick Start](#quick-start) | [Documentation](#core-concepts) | [API Reference](#api-reference) | [LLM Docs](https://raw.githubusercontent.com/PeanutSplash/promptloom/main/llms.txt)
+
+</div>
+
+---
 
 ## Why
 
@@ -10,38 +23,65 @@ Every LLM app stitches prompts together from pieces. Most do it with string conc
 
 **promptloom** extracts these battle-tested patterns into a zero-dependency library.
 
-| Problem | How promptloom solves it |
-|---------|------------------------|
-| Changing one section breaks prompt cache → wasted money | **Multi-zone scoping** — each zone gets its own cache scope (`global`, `org`, or `null`) |
-| Tool descriptions scattered everywhere | **Tool registry** with session-level prompt caching and stable ordering |
-| Too many tools bloat the system prompt | **Deferred tools** — marked tools are excluded from the prompt, loaded on demand |
-| Sections only relevant to some models/environments | **Conditional sections** — `when` predicates gate inclusion per compile context |
-| No idea how many tokens the prompt costs | **Token estimation** built into every `compile()` call |
-| Different API providers need different formats | **Multi-provider output** — `toAnthropic()`, `toOpenAI()`, `toOpenAIResponses()`, `toBedrock()`, `toGemini()` |
+### Highlights
+
+- **Multi-zone cache scoping** — each zone gets its own cache scope (`global`, `org`, or `null`), so changing one section won't break the cache for others
+- **Tool registry** — session-level prompt caching with stable ordering and deferred loading for 40+ tool setups
+- **Conditional sections** — `when` predicates gate inclusion per model, environment, or user type
+- **Token estimation & budgeting** — built into every `compile()` call, with diminishing returns detection for agent loops
+- **5 provider formatters** — `toAnthropic()` / `toOpenAI()` / `toOpenAIResponses()` / `toBedrock()` / `toGemini()` plus any OpenAI-compatible provider (Groq, Together, DeepSeek, Mistral, Fireworks...)
 
 ## Install
 
 ```bash
+# npm
+npm install promptloom
+
+# bun
 bun add promptloom
+
+# pnpm
+pnpm add promptloom
+
+# yarn
+yarn add promptloom
 ```
 
+> **Requirements:** TypeScript ^6.0 (peer dependency). Zero runtime dependencies.
+
 ## Quick Start
+
+### For Agents
+
+Feed this to your AI assistant and start building:
+
+```bash
+curl -s https://raw.githubusercontent.com/PeanutSplash/promptloom/main/llms.txt
+```
+
+Or paste the URL directly in your AI chat:
+
+```
+https://raw.githubusercontent.com/PeanutSplash/promptloom/main/llms.txt
+```
+
+### For Humans
 
 ```ts
 import { PromptCompiler, toAnthropic } from 'promptloom'
 
 const pc = new PromptCompiler()
 
-// ── Zone 1: Attribution header (no cache) ──
+// Zone 1: Attribution header (no cache)
 pc.zone(null)
 pc.static('attribution', 'x-billing-org: org-123')
 
-// ── Zone 2: Static rules (globally cacheable) ──
+// Zone 2: Static rules (globally cacheable)
 pc.zone('global')
 pc.static('identity', 'You are a code review bot.')
 pc.static('rules', 'Only comment on bugs, not style.')
 
-// ── Zone 3: Dynamic context (session-specific, no cache) ──
+// Zone 3: Dynamic context (session-specific)
 pc.zone(null)
 pc.dynamic('diff', async () => {
   const diff = await getCurrentDiff()
@@ -53,7 +93,7 @@ pc.static('thinking', 'Use extended thinking for complex reviews.', {
   when: (ctx) => ctx.model?.includes('opus') ?? false,
 })
 
-// ── Tools (inline + deferred) ──
+// Tools (inline + deferred)
 pc.tool({
   name: 'post_comment',
   prompt: 'Post a review comment on a specific line of code.',
@@ -66,7 +106,7 @@ pc.tool({
     },
     required: ['file', 'line', 'body'],
   },
-  order: 1, // explicit ordering for cache stability
+  order: 1,
 })
 
 pc.tool({
@@ -76,19 +116,20 @@ pc.tool({
   deferred: true, // excluded from prompt, loaded on demand
 })
 
-// ── Compile (with context for conditional sections) ──
+// Compile
 const result = await pc.compile({ model: 'claude-opus-4-6' })
 
 result.blocks        // CacheBlock[] — one per zone, with scope annotations
 result.tools         // CompiledTool[] — inline tools only
-result.deferredTools // CompiledTool[] — deferred tools (with defer_loading: true)
+result.deferredTools // CompiledTool[] — deferred tools
 result.tokens        // { systemPrompt, tools, deferredTools, total }
 result.text          // Full prompt as a single string
 ```
 
 ## Use with APIs
 
-### Anthropic
+<details>
+<summary><b>Anthropic</b></summary>
 
 ```ts
 import Anthropic from '@anthropic-ai/sdk'
@@ -98,7 +139,7 @@ const pc = new PromptCompiler()
 // ... add zones, sections, and tools ...
 
 const result = await pc.compile({ model: 'claude-sonnet-4-6' })
-const { system, tools } = toAnthropic(result) // cache-annotated blocks + tool schemas
+const { system, tools } = toAnthropic(result)
 
 const response = await new Anthropic().messages.create({
   model: 'claude-sonnet-4-6',
@@ -109,7 +150,10 @@ const response = await new Anthropic().messages.create({
 })
 ```
 
-### OpenAI
+</details>
+
+<details>
+<summary><b>OpenAI</b></summary>
 
 ```ts
 import OpenAI from 'openai'
@@ -119,7 +163,7 @@ const pc = new PromptCompiler()
 // ... add zones, sections, and tools ...
 
 const result = await pc.compile()
-const { system, tools } = toOpenAI(result) // single string + function tools
+const { system, tools } = toOpenAI(result)
 
 const response = await new OpenAI().chat.completions.create({
   model: 'gpt-4o',
@@ -131,39 +175,10 @@ const response = await new OpenAI().chat.completions.create({
 })
 ```
 
-### AWS Bedrock
+</details>
 
-```ts
-import { PromptCompiler, toBedrock } from 'promptloom'
-
-const result = await pc.compile()
-const { system, toolConfig } = toBedrock(result) // cachePoint + toolSpec format
-
-// Use with @aws-sdk/client-bedrock-runtime ConverseCommand
-```
-
-### Google Gemini / Vertex AI
-
-```ts
-import { GoogleGenAI } from '@google/genai'
-import { PromptCompiler, toGemini } from 'promptloom'
-
-const pc = new PromptCompiler()
-// ... add zones, sections, and tools ...
-
-const result = await pc.compile()
-const { systemInstruction, tools } = toGemini(result) // parts array + functionDeclarations
-
-const response = await new GoogleGenAI({ apiKey: '...' }).models.generateContent({
-  model: 'gemini-2.5-pro',
-  contents: [{ role: 'user', parts: [{ text: 'Review this PR' }] }],
-  config: { systemInstruction, tools },
-})
-```
-
-The same format works for Vertex AI — just swap the client initialization.
-
-### OpenAI Responses API
+<details>
+<summary><b>OpenAI Responses API</b></summary>
 
 ```ts
 import OpenAI from 'openai'
@@ -173,7 +188,7 @@ const pc = new PromptCompiler()
 // ... add zones, sections, and tools ...
 
 const result = await pc.compile()
-const { instructions, tools } = toOpenAIResponses(result) // instructions field + flat tools
+const { instructions, tools } = toOpenAIResponses(result)
 
 const response = await new OpenAI().responses.create({
   model: 'gpt-4o',
@@ -183,7 +198,46 @@ const response = await new OpenAI().responses.create({
 })
 ```
 
-### OpenAI-Compatible Providers
+</details>
+
+<details>
+<summary><b>AWS Bedrock</b></summary>
+
+```ts
+import { PromptCompiler, toBedrock } from 'promptloom'
+
+const result = await pc.compile()
+const { system, toolConfig } = toBedrock(result)
+
+// Use with @aws-sdk/client-bedrock-runtime ConverseCommand
+```
+
+</details>
+
+<details>
+<summary><b>Google Gemini / Vertex AI</b></summary>
+
+```ts
+import { GoogleGenAI } from '@google/genai'
+import { PromptCompiler, toGemini } from 'promptloom'
+
+const pc = new PromptCompiler()
+// ... add zones, sections, and tools ...
+
+const result = await pc.compile()
+const { systemInstruction, tools } = toGemini(result)
+
+const response = await new GoogleGenAI({ apiKey: '...' }).models.generateContent({
+  model: 'gemini-2.5-pro',
+  contents: [{ role: 'user', parts: [{ text: 'Review this PR' }] }],
+  config: { systemInstruction, tools },
+})
+```
+
+</details>
+
+<details>
+<summary><b>OpenAI-Compatible Providers (Groq, Together, DeepSeek, Mistral, Fireworks)</b></summary>
 
 `toOpenAI()` works with any OpenAI-compatible API — just swap the `baseURL`:
 
@@ -203,12 +257,14 @@ const together = new OpenAI({ baseURL: 'https://api.together.xyz/v1', apiKey: '.
 // DeepSeek
 const deepseek = new OpenAI({ baseURL: 'https://api.deepseek.com', apiKey: '...' })
 
-// Mistral (also has native SDK)
+// Mistral
 const mistral = new OpenAI({ baseURL: 'https://api.mistral.ai/v1', apiKey: '...' })
 
 // Fireworks AI
 const fireworks = new OpenAI({ baseURL: 'https://api.fireworks.ai/inference/v1', apiKey: '...' })
 ```
+
+</details>
 
 ## Core Concepts
 
@@ -231,7 +287,7 @@ pc.zone(null)      // Zone 4: session-specific (dynamic context)
 pc.dynamic('git', async () => `Branch: ${await getBranch()}`)
 ```
 
-This compiles to 4 `CacheBlock`s:
+Compiles to 4 `CacheBlock`s:
 
 ```
 ┌─────────────────────────────┐
@@ -246,11 +302,9 @@ This compiles to 4 `CacheBlock`s:
 └─────────────────────────────┘
 ```
 
-The `boundary()` method is kept for backward compatibility — it's equivalent to `zone(null)` when `enableGlobalCache` is true.
-
 ### Conditional Sections
 
-In Claude Code, sections are gated on `feature('FLAG')`, `process.env.USER_TYPE`, and model capabilities. promptloom uses `when` predicates:
+Gate sections on model, environment, or user type:
 
 ```ts
 // Only for Opus models
@@ -268,7 +322,6 @@ pc.static('internal_tools', 'You have access to internal APIs.', {
   when: (ctx) => ctx.userType === 'internal',
 })
 
-// Predicates are evaluated at compile time
 const result = await pc.compile({
   model: 'claude-opus-4-6',
   mcpServers: ['figma', 'slack'],
@@ -276,9 +329,11 @@ const result = await pc.compile({
 })
 ```
 
-### Tool Prompt Injection
+### Tool Management
 
-Every tool carries its own LLM-facing "user manual", resolved once per session and cached:
+#### Tool Prompt Injection
+
+Every tool carries its own LLM-facing description, resolved once per session and cached:
 
 ```ts
 pc.tool({
@@ -288,37 +343,25 @@ pc.tool({
     return `Execute shell commands.\n${sandbox ? 'Running in sandbox.' : ''}`
   },
   inputSchema: { /* ... */ },
-  order: 1,          // explicit ordering for cache stability
+  order: 1, // explicit ordering for cache stability
 })
 ```
 
-### Deferred Tools
+#### Deferred Tools
 
-When you have many tools (Claude Code has 42+), most aren't needed every turn. Deferred tools are excluded from the system prompt and discovered on demand:
+When you have many tools (Claude Code has 42+), most aren't needed every turn:
 
 ```ts
 pc.tool({
   name: 'web_search',
   prompt: 'Search the web for information.',
   inputSchema: { /* ... */ },
-  deferred: true,  // not in system prompt, loaded via tool search
+  deferred: true, // not in system prompt, loaded via tool search
 })
 
 const result = await pc.compile()
 result.tools         // inline tools only
 result.deferredTools // deferred tools (with defer_loading: true)
-result.tokens.total  // does NOT count deferred tools
-```
-
-### Tool Ordering for Cache Stability
-
-Reordering tools changes the serialized bytes, breaking prompt cache. Use `order` for deterministic sorting:
-
-```ts
-pc.tool({ name: 'bash', prompt: '...', inputSchema: {}, order: 1 })
-pc.tool({ name: 'read', prompt: '...', inputSchema: {}, order: 2 })
-pc.tool({ name: 'edit', prompt: '...', inputSchema: {}, order: 3 })
-// Tools without `order` come last, in insertion order
 ```
 
 ### Token Budget
@@ -335,9 +378,7 @@ result.tokens.deferredTools // ~100 tokens (not counted in total)
 result.tokens.total         // ~550 tokens (systemPrompt + tools)
 ```
 
-#### Budget Tracking
-
-For long-running agent loops:
+#### Budget Tracking for Agent Loops
 
 ```ts
 import { createBudgetTracker, checkBudget } from 'promptloom'
@@ -352,9 +393,7 @@ if (decision.action === 'continue') {
 }
 ```
 
-#### Budget Parsing from Natural Language
-
-Parse user-specified budgets like Claude Code does:
+#### Natural Language Budget Parsing
 
 ```ts
 import { parseTokenBudget } from 'promptloom'
@@ -376,7 +415,7 @@ parseTokenBudget('hello world')     // null
 | `static(name, content, options?)` | Add a static section. `options.when` for conditional inclusion |
 | `dynamic(name, compute, options?)` | Add a dynamic section (recomputed every `compile()`) |
 | `tool(def)` | Register a tool. Set `deferred: true` for on-demand loading, `order` for sort stability |
-| `compile(context?)` | Compile everything → `CompileResult`. Context is passed to `when` predicates |
+| `compile(context?)` | Compile everything -> `CompileResult`. Context is passed to `when` predicates |
 | `clearCache()` | Clear all section + tool caches |
 | `clearSectionCache()` | Clear only section cache |
 | `clearToolCache()` | Clear only tool cache |
@@ -397,47 +436,37 @@ parseTokenBudget('hello world')     // null
 
 ### Provider Formatters
 
-```ts
-import { toAnthropic, toOpenAI, toOpenAIResponses, toBedrock, toGemini } from 'promptloom'
-
-toAnthropic(result)       // { system: TextBlockParam[], tools: AnthropicTool[] }
-toOpenAI(result)          // { system: string, tools: { type: 'function', function }[] }
-toOpenAIResponses(result) // { instructions: string, tools: OpenAIResponsesTool[] }
-toBedrock(result)         // { system: BedrockSystemBlock[], toolConfig: { tools } }
-toGemini(result)          // { systemInstruction: GeminiContent, tools: GeminiTool[] }
-```
-
-| Formatter | Providers |
-|-----------|-----------|
-| `toAnthropic()` | Anthropic (1P) |
-| `toOpenAI()` | OpenAI, Azure OpenAI, Mistral, Groq, Together, DeepSeek, Fireworks, Cohere v2 |
-| `toOpenAIResponses()` | OpenAI Responses API |
-| `toBedrock()` | AWS Bedrock (Claude, Llama, Mistral, Cohere — unified Converse API) |
-| `toGemini()` | Google Gemini, Google Vertex AI |
+| Formatter | Output | Providers |
+|-----------|--------|-----------|
+| `toAnthropic(result)` | `{ system, tools }` | Anthropic (1P) |
+| `toOpenAI(result)` | `{ system, tools }` | OpenAI, Azure, Groq, Together, DeepSeek, Mistral, Fireworks, Cohere v2 |
+| `toOpenAIResponses(result)` | `{ instructions, tools }` | OpenAI Responses API |
+| `toBedrock(result)` | `{ system, toolConfig }` | AWS Bedrock (Claude, Llama, Mistral, Cohere — Converse API) |
+| `toGemini(result)` | `{ systemInstruction, tools }` | Google Gemini, Google Vertex AI |
 
 ### Standalone Utilities
 
 ```ts
 import {
   // Token estimation
-  estimateTokens,           // Rough estimate (bytes / 4)
-  estimateTokensForFileType, // File-type-aware (JSON = bytes / 2)
+  estimateTokens,              // Rough estimate (bytes / 4)
+  estimateTokensForFileType,   // File-type-aware (JSON = bytes / 2)
 
   // Budget
-  createBudgetTracker,       // Create a new tracker
-  checkBudget,               // Check budget → continue or stop
-  parseTokenBudget,          // Parse "+500k" → 500_000
+  createBudgetTracker,         // Create a new tracker
+  checkBudget,                 // Check budget -> continue or stop
+  parseTokenBudget,            // Parse "+500k" -> 500_000
 
   // Low-level (for custom compilers)
-  splitAtBoundary,           // Split text at sentinel → CacheBlock[]
-  section,                   // Create a static Section object
-  dynamicSection,            // Create a dynamic Section object
-  defineTool,                // Create a ToolDef with fail-closed defaults
-  SectionCache,              // Section cache class
-  ToolCache,                 // Tool cache class
-  resolveSections,           // Resolve sections against cache
-  compileTool,               // Compile a single tool
-  compileTools,              // Compile all tools
+  splitAtBoundary,             // Split text at sentinel -> CacheBlock[]
+  section,                     // Create a static Section object
+  dynamicSection,              // Create a dynamic Section object
+  defineTool,                  // Create a ToolDef with fail-closed defaults
+  SectionCache,                // Section cache class
+  ToolCache,                   // Tool cache class
+  resolveSections,             // Resolve sections against cache
+  compileTool,                 // Compile a single tool
+  compileTools,                // Compile all tools
 } from 'promptloom'
 ```
 
@@ -457,10 +486,27 @@ Their system prompt is assembled from 7+ layers:
 
 Layers 1-6 are **static** (globally cacheable). Layer 7+ is **dynamic** (session-specific). The boundary between them is a literal sentinel string that the API layer uses to annotate cache scopes.
 
-Sections are conditionally included based on feature flags (`feature('TOKEN_BUDGET')`), user type (`process.env.USER_TYPE === 'ant'`), and model capabilities. Each of their 42+ tools carries its own `prompt.ts`, and tools above a context threshold are deferred (loaded via `ToolSearchTool` on demand).
+## Contributing
 
-promptloom gives you all of these primitives.
+Contributions are welcome! Please feel free to open an issue or submit a pull request.
+
+```bash
+git clone https://github.com/PeanutSplash/promptloom.git
+cd promptloom
+bun install
+bun test          # Run tests
+bun run dev       # Run CLI demo
+bunx tsc --noEmit # Type check
+```
 
 ## License
 
-MIT
+[MIT](./LICENSE)
+
+---
+
+<div align="center">
+
+**[GitHub](https://github.com/PeanutSplash/promptloom)** | **[npm](https://www.npmjs.com/package/promptloom)** | **[LLM Docs](https://raw.githubusercontent.com/PeanutSplash/promptloom/main/llms.txt)**
+
+</div>
