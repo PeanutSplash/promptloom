@@ -1,6 +1,6 @@
-# promptc — Prompt Compiler
+# promptloom
 
-Production-grade prompt assembly with cache boundaries, tool injection, and token budgeting. Inspired by Claude Code's 7-layer prompt architecture.
+Weave production-grade LLM prompts with cache boundaries, tool injection, and token budgeting. Reverse-engineered from Claude Code's 7-layer prompt architecture.
 
 ## Commands
 
