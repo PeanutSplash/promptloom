@@ -410,12 +410,14 @@ describe('toBedrock', () => {
     const result = await pc.compile()
     const { system, toolConfig } = toBedrock(result)
 
-    expect(system).toHaveLength(2)
-    expect(system[0]!.cachePoint).toEqual({ type: 'default' })
-    expect(system[1]!.cachePoint).toBeUndefined()
+    // 'cached' block → text + cachePoint; 'not cached' block → text only
+    expect(system).toHaveLength(3)
+    expect(system[0]).toEqual({ text: 'cached' })
+    expect(system[1]).toEqual({ cachePoint: { type: 'default' } })
+    expect(system[2]).toEqual({ text: 'not cached' })
     expect(toolConfig.tools).toHaveLength(1)
     expect(toolConfig.tools[0]!.toolSpec.name).toBe('t')
-    expect(toolConfig.tools[0]!.toolSpec.inputSchema.json).toEqual({ type: 'object' })
+    expect(toolConfig.tools[0]!.toolSpec.inputSchema.jsonSchema).toEqual({ type: 'object' })
   })
 })
 

@@ -14,17 +14,22 @@ import type { CacheBlock, CompiledTool, CompileResult } from './types.ts'
 
 // ─── Anthropic ───────────────────────────────────────────────────
 
+export interface AnthropicCacheControl {
+  type: 'ephemeral'
+  ttl?: '5m' | '1h'
+}
+
 export interface AnthropicTextBlock {
   type: 'text'
   text: string
-  cache_control?: { type: 'ephemeral' }
+  cache_control?: AnthropicCacheControl
 }
 
 export interface AnthropicTool {
   name: string
   description: string
   input_schema: Record<string, unknown>
-  cache_control?: { type: 'ephemeral' }
+  cache_control?: AnthropicCacheControl
   defer_loading?: true
 }
 
@@ -92,16 +97,15 @@ export function toOpenAI(result: CompileResult): {
 
 // ─── AWS Bedrock ─────────────────────────────────────────────────
 
-export interface BedrockTextBlock {
-  text: string
-  cachePoint?: { type: 'default' }
-}
+export type BedrockSystemBlock =
+  | { text: string }
+  | { cachePoint: { type: 'default' } }
 
 export interface BedrockTool {
   toolSpec: {
     name: string
     description: string
-    inputSchema: { json: Record<string, unknown> }
+    inputSchema: { jsonSchema: Record<string, unknown> }
   }
 }
 
@@ -112,22 +116,22 @@ export interface BedrockTool {
  * `cache_control: { type: 'ephemeral' }`. Tools use `toolSpec` wrapper.
  */
 export function toBedrock(result: CompileResult): {
-  system: BedrockTextBlock[]
+  system: BedrockSystemBlock[]
   toolConfig: { tools: BedrockTool[] }
 } {
   return {
-    system: result.blocks.map((block) => ({
-      text: block.text,
+    system: result.blocks.flatMap((block): BedrockSystemBlock[] => [
+      { text: block.text },
       ...(block.cacheScope !== null
-        ? { cachePoint: { type: 'default' as const } }
-        : {}),
-    })),
+        ? [{ cachePoint: { type: 'default' as const } }]
+        : []),
+    ]),
     toolConfig: {
       tools: result.tools.map((tool) => ({
         toolSpec: {
           name: tool.name,
           description: tool.description,
-          inputSchema: { json: tool.input_schema },
+          inputSchema: { jsonSchema: tool.input_schema },
         },
       })),
     },

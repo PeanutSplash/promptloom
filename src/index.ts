@@ -89,9 +89,10 @@ export type {
 export type { BudgetTracker, BudgetDecision } from './tokens.ts'
 export type { SplitOptions } from './boundary.ts'
 export type {
+  AnthropicCacheControl,
   AnthropicTextBlock,
   AnthropicTool,
   OpenAITool,
-  BedrockTextBlock,
+  BedrockSystemBlock,
   BedrockTool,
 } from './providers.ts'
