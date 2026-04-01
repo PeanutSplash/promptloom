@@ -6,16 +6,18 @@ Reverse-engineered from [Claude Code](https://claude.ai/code)'s 7-layer prompt a
 
 ## Why
 
-Every LLM app stitches prompts together from pieces. Most do it with string concatenation. Claude Code does it with a **compiler** — static/dynamic section separation, cache boundary markers, per-tool prompt injection, and token budget tracking.
+Every LLM app stitches prompts together from pieces. Most do it with string concatenation. Claude Code does it with a **compiler** — multi-zone cache scoping, conditional sections, per-tool prompt injection, deferred tool loading, and token budget tracking.
 
 **promptloom** extracts these battle-tested patterns into a zero-dependency library.
 
 | Problem | How promptloom solves it |
 |---------|------------------------|
-| Changing one section breaks prompt cache → wasted money | **Cache boundary** splits static (cacheable) from dynamic content |
-| Tool descriptions scattered everywhere | **Tool registry** with session-level prompt caching |
+| Changing one section breaks prompt cache → wasted money | **Multi-zone scoping** — each zone gets its own cache scope (`global`, `org`, or `null`) |
+| Tool descriptions scattered everywhere | **Tool registry** with session-level prompt caching and stable ordering |
+| Too many tools bloat the system prompt | **Deferred tools** — marked tools are excluded from the prompt, loaded on demand |
+| Sections only relevant to some models/environments | **Conditional sections** — `when` predicates gate inclusion per compile context |
 | No idea how many tokens the prompt costs | **Token estimation** built into every `compile()` call |
-| Dynamic context recomputed unnecessarily | **Two-tier caching**: static sections compute once, dynamic sections recompute per turn |
+| Different API providers need different formats | **Multi-provider output** — `toAnthropic()`, `toOpenAI()`, `toBedrock()` |
 
 ## Install
 
@@ -26,26 +28,32 @@ bun add promptloom
 ## Quick Start
 
 ```ts
-import { PromptCompiler } from 'promptloom'
+import { PromptCompiler, toAnthropic } from 'promptloom'
 
-const pc = new PromptCompiler({ enableGlobalCache: true })
+const pc = new PromptCompiler()
 
-// ── Static sections (computed once, cached for the session) ──
+// ── Zone 1: Attribution header (no cache) ──
+pc.zone(null)
+pc.static('attribution', 'x-billing-org: org-123')
+
+// ── Zone 2: Static rules (globally cacheable) ──
+pc.zone('global')
 pc.static('identity', 'You are a code review bot.')
 pc.static('rules', 'Only comment on bugs, not style.')
 
-// ── Cache boundary ──
-// Everything above is globally cacheable (saves money on Anthropic API).
-// Everything below is session-specific.
-pc.boundary()
-
-// ── Dynamic sections (recomputed every compile() call) ──
-pc.dynamic('context', async () => {
+// ── Zone 3: Dynamic context (session-specific, no cache) ──
+pc.zone(null)
+pc.dynamic('diff', async () => {
   const diff = await getCurrentDiff()
   return `Review this diff:\n${diff}`
 })
 
-// ── Tools with embedded prompts ──
+// Conditional section — only included for Opus models
+pc.static('thinking', 'Use extended thinking for complex reviews.', {
+  when: (ctx) => ctx.model?.includes('opus') ?? false,
+})
+
+// ── Tools (inline + deferred) ──
 pc.tool({
   name: 'post_comment',
   prompt: 'Post a review comment on a specific line of code.',
@@ -58,105 +66,215 @@ pc.tool({
     },
     required: ['file', 'line', 'body'],
   },
+  order: 1, // explicit ordering for cache stability
 })
 
-// ── Compile ──
-const result = await pc.compile()
+pc.tool({
+  name: 'web_search',
+  prompt: 'Search the web for context.',
+  inputSchema: { type: 'object', properties: { query: { type: 'string' } } },
+  deferred: true, // excluded from prompt, loaded on demand
+})
 
-result.blocks   // CacheBlock[] — with cache scope annotations
-result.tools    // CompiledTool[] — with resolved prompt descriptions
-result.tokens   // { systemPrompt: 150, tools: 200, total: 350 }
-result.text     // Full prompt as a single string
+// ── Compile (with context for conditional sections) ──
+const result = await pc.compile({ model: 'claude-opus-4-6' })
+
+result.blocks        // CacheBlock[] — one per zone, with scope annotations
+result.tools         // CompiledTool[] — inline tools only
+result.deferredTools // CompiledTool[] — deferred tools (with defer_loading: true)
+result.tokens        // { systemPrompt, tools, deferredTools, total }
+result.text          // Full prompt as a single string
 ```
 
-## Use with the Anthropic API
+## Use with APIs
+
+### Anthropic
 
 ```ts
 import Anthropic from '@anthropic-ai/sdk'
-import { PromptCompiler, toAnthropicBlocks } from 'promptloom'
+import { PromptCompiler, toAnthropic } from 'promptloom'
 
-const pc = new PromptCompiler({ enableGlobalCache: true })
-// ... add sections and tools ...
+const pc = new PromptCompiler()
+// ... add zones, sections, and tools ...
 
-const result = await pc.compile()
-const client = new Anthropic()
+const result = await pc.compile({ model: 'claude-sonnet-4-6' })
+const { system, tools } = toAnthropic(result) // cache-annotated blocks + tool schemas
 
-const response = await client.messages.create({
+const response = await new Anthropic().messages.create({
   model: 'claude-sonnet-4-6',
   max_tokens: 4096,
-  system: toAnthropicBlocks(result.blocks), // cache-annotated blocks
-  tools: result.tools,                       // compiled tool schemas
+  system,   // TextBlockParam[] with cache_control
+  tools,    // includes deferred tools with defer_loading: true
   messages: [{ role: 'user', content: 'Review this PR' }],
 })
 ```
 
-## Core Concepts
-
-### Sections: Static vs Dynamic
-
-Inspired by Claude Code's `systemPromptSection()` and `DANGEROUS_uncachedSystemPromptSection()`:
+### OpenAI
 
 ```ts
-// Static: computed once, cached for the entire session
-pc.static('rules', () => loadRulesFromFile())
+import OpenAI from 'openai'
+import { PromptCompiler, toOpenAI } from 'promptloom'
 
-// Dynamic: recomputed every compile() call
-// Use sparingly — breaks prompt cache stability
-pc.dynamic('mcp_servers', async () => {
-  const servers = await discoverMCPServers()
-  return formatServerInstructions(servers)
+const pc = new PromptCompiler()
+// ... add zones, sections, and tools ...
+
+const result = await pc.compile()
+const { system, tools } = toOpenAI(result) // single string + function tools
+
+const response = await new OpenAI().chat.completions.create({
+  model: 'gpt-4o',
+  messages: [
+    { role: 'system', content: system },
+    { role: 'user', content: 'Review this PR' },
+  ],
+  tools,
 })
 ```
 
-Static sections are resolved once and cached in memory (mirroring Claude Code's `systemPromptSectionCache`). Dynamic sections always recompute — Claude Code names them "DANGEROUS" for good reason: they break cache hit rates.
+### AWS Bedrock
 
-### Cache Boundary
+```ts
+import { PromptCompiler, toBedrock } from 'promptloom'
 
-The boundary marker splits the prompt into two zones:
+const result = await pc.compile()
+const { system, toolConfig } = toBedrock(result) // cachePoint + toolSpec format
+
+// Use with @aws-sdk/client-bedrock-runtime ConverseCommand
+```
+
+## Core Concepts
+
+### Zones: Multi-Block Cache Scoping
+
+Claude Code uses a single `SYSTEM_PROMPT_DYNAMIC_BOUNDARY` to split the prompt into 2 blocks. promptloom generalizes this to **N zones** — each zone compiles into a separate `CacheBlock` with its own cache scope.
+
+```ts
+pc.zone(null)      // Zone 1: no-cache (attribution headers)
+pc.static('header', 'x-billing: org-123')
+
+pc.zone('global')  // Zone 2: globally cacheable (identity, rules)
+pc.static('identity', 'You are Claude Code.')
+pc.static('rules', 'Follow safety protocols.')
+
+pc.zone('org')     // Zone 3: org-level cacheable
+pc.static('org_rules', 'Company-specific guidelines.')
+
+pc.zone(null)      // Zone 4: session-specific (dynamic context)
+pc.dynamic('git', async () => `Branch: ${await getBranch()}`)
+```
+
+This compiles to 4 `CacheBlock`s:
 
 ```
 ┌─────────────────────────────┐
-│  Static Section 1           │
-│  Static Section 2           │  ← cacheScope: 'global'
-│  Static Section 3           │    (cross-org cacheable)
-├─────────────────────────────┤  ← pc.boundary()
-│  Dynamic Section 1          │
-│  Dynamic Section 2          │  ← cacheScope: null
-│                             │    (session-specific)
+│  x-billing: org-123         │  Block 1  scope=null    (no cache)
+├─────────────────────────────┤
+│  You are Claude Code.       │  Block 2  scope=global  (cross-org cache)
+│  Follow safety protocols.   │
+├─────────────────────────────┤
+│  Company-specific guidelines│  Block 3  scope=org     (org-level cache)
+├─────────────────────────────┤
+│  Branch: main               │  Block 4  scope=null    (session-specific)
 └─────────────────────────────┘
 ```
 
-This maps directly to Anthropic API's `cache_control` field on system prompt text blocks. Content before the boundary can be cached across all users of your app. Content after is unique per session.
+The `boundary()` method is kept for backward compatibility — it's equivalent to `zone(null)` when `enableGlobalCache` is true.
+
+### Conditional Sections
+
+In Claude Code, sections are gated on `feature('FLAG')`, `process.env.USER_TYPE`, and model capabilities. promptloom uses `when` predicates:
+
+```ts
+// Only for Opus models
+pc.static('thinking_guide', 'Use extended thinking for complex tasks.', {
+  when: (ctx) => ctx.model?.includes('opus') ?? false,
+})
+
+// Only when MCP servers are connected
+pc.dynamic('mcp', async () => fetchMCPInstructions(), {
+  when: (ctx) => (ctx.mcpServers as string[])?.length > 0,
+})
+
+// Only for internal users
+pc.static('internal_tools', 'You have access to internal APIs.', {
+  when: (ctx) => ctx.userType === 'internal',
+})
+
+// Predicates are evaluated at compile time
+const result = await pc.compile({
+  model: 'claude-opus-4-6',
+  mcpServers: ['figma', 'slack'],
+  userType: 'internal',
+})
+```
 
 ### Tool Prompt Injection
 
-In Claude Code, every tool has its own `prompt.ts` — an LLM-facing "user manual". promptloom mirrors this pattern:
+Every tool carries its own LLM-facing "user manual", resolved once per session and cached:
 
 ```ts
 pc.tool({
   name: 'Bash',
-  // This prompt is the tool's "description" sent to the API.
-  // It's resolved once per session and cached (avoids mid-session drift).
   prompt: async () => {
     const sandbox = await detectSandbox()
     return `Execute shell commands.\n${sandbox ? 'Running in sandbox.' : ''}`
   },
   inputSchema: { /* ... */ },
+  order: 1,          // explicit ordering for cache stability
 })
 ```
 
-Tool prompts support both static strings and async functions. The resolved description is cached per session with a stable cache key (including the input schema hash), preventing unnecessary recomputation.
+### Deferred Tools
 
-### Token Budget Tracking
+When you have many tools (Claude Code has 42+), most aren't needed every turn. Deferred tools are excluded from the system prompt and discovered on demand:
 
-For long-running agent loops that need to monitor token consumption:
+```ts
+pc.tool({
+  name: 'web_search',
+  prompt: 'Search the web for information.',
+  inputSchema: { /* ... */ },
+  deferred: true,  // not in system prompt, loaded via tool search
+})
+
+const result = await pc.compile()
+result.tools         // inline tools only
+result.deferredTools // deferred tools (with defer_loading: true)
+result.tokens.total  // does NOT count deferred tools
+```
+
+### Tool Ordering for Cache Stability
+
+Reordering tools changes the serialized bytes, breaking prompt cache. Use `order` for deterministic sorting:
+
+```ts
+pc.tool({ name: 'bash', prompt: '...', inputSchema: {}, order: 1 })
+pc.tool({ name: 'read', prompt: '...', inputSchema: {}, order: 2 })
+pc.tool({ name: 'edit', prompt: '...', inputSchema: {}, order: 3 })
+// Tools without `order` come last, in insertion order
+```
+
+### Token Budget
+
+#### Estimation
+
+Every `compile()` call includes token estimates:
+
+```ts
+const result = await pc.compile()
+result.tokens.systemPrompt  // ~350 tokens
+result.tokens.tools         // ~200 tokens (inline only)
+result.tokens.deferredTools // ~100 tokens (not counted in total)
+result.tokens.total         // ~550 tokens (systemPrompt + tools)
+```
+
+#### Budget Tracking
+
+For long-running agent loops:
 
 ```ts
 import { createBudgetTracker, checkBudget } from 'promptloom'
 
 const tracker = createBudgetTracker()
-
-// In your agent loop:
 const decision = checkBudget(tracker, currentTokens, { budget: 100_000 })
 
 if (decision.action === 'continue') {
@@ -166,7 +284,18 @@ if (decision.action === 'continue') {
 }
 ```
 
-The budget tracker detects **diminishing returns** — if the model produces tiny outputs for 3+ consecutive continuations, it stops automatically instead of wasting tokens.
+#### Budget Parsing from Natural Language
+
+Parse user-specified budgets like Claude Code does:
+
+```ts
+import { parseTokenBudget } from 'promptloom'
+
+parseTokenBudget('+500k')           // 500_000
+parseTokenBudget('spend 2M tokens') // 2_000_000
+parseTokenBudget('+1.5b')           // 1_500_000_000
+parseTokenBudget('hello world')     // null
+```
 
 ## API Reference
 
@@ -174,95 +303,64 @@ The budget tracker detects **diminishing returns** — if the model produces tin
 
 | Method | Description |
 |--------|-------------|
-| `static(name, content)` | Add a static section (string or sync/async function) |
-| `dynamic(name, compute)` | Add a dynamic section (recomputed every `compile()`) |
-| `boundary()` | Insert cache boundary marker |
-| `tool(def)` | Register a tool with embedded prompt |
-| `compile()` | Compile everything → `CompileResult` |
+| `zone(scope)` | Start a new cache zone (`'global'`, `'org'`, or `null`) |
+| `boundary()` | Shorthand for `zone(null)` when `enableGlobalCache` is true |
+| `static(name, content, options?)` | Add a static section. `options.when` for conditional inclusion |
+| `dynamic(name, compute, options?)` | Add a dynamic section (recomputed every `compile()`) |
+| `tool(def)` | Register a tool. Set `deferred: true` for on-demand loading, `order` for sort stability |
+| `compile(context?)` | Compile everything → `CompileResult`. Context is passed to `when` predicates |
 | `clearCache()` | Clear all section + tool caches |
 | `clearSectionCache()` | Clear only section cache |
 | `clearToolCache()` | Clear only tool cache |
-| `sectionCount` | Number of registered sections |
-| `toolCount` | Number of registered tools |
-| `listSections()` | List sections with their types |
+| `sectionCount` | Number of registered sections (excludes zone markers) |
+| `toolCount` | Number of registered tools (inline + deferred) |
+| `listSections()` | List sections with their types (`static`, `dynamic`, `zone`) |
 | `listTools()` | List registered tool names |
 
 ### `CompileResult`
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `blocks` | `CacheBlock[]` | Prompt blocks with `cacheScope` annotations |
-| `tools` | `CompiledTool[]` | API-ready tool schemas with resolved descriptions |
-| `tokens` | `TokenEstimate` | `{ systemPrompt, tools, total }` |
+| `blocks` | `CacheBlock[]` | One block per zone, with `cacheScope` annotations |
+| `tools` | `CompiledTool[]` | Inline tool schemas with resolved descriptions |
+| `deferredTools` | `CompiledTool[]` | Deferred tool schemas (with `defer_loading: true`) |
+| `tokens` | `TokenEstimate` | `{ systemPrompt, tools, deferredTools, total }` |
 | `text` | `string` | Full prompt as a single joined string |
+
+### Provider Formatters
+
+```ts
+import { toAnthropic, toOpenAI, toBedrock } from 'promptloom'
+
+toAnthropic(result)  // { system: TextBlockParam[], tools: AnthropicTool[] }
+toOpenAI(result)     // { system: string, tools: { type: 'function', function }[] }
+toBedrock(result)    // { system: BedrockTextBlock[], toolConfig: { tools } }
+```
 
 ### Standalone Utilities
 
 ```ts
 import {
-  // Cache boundary
-  splitAtBoundary,     // Split text at boundary → CacheBlock[]
-  toAnthropicBlocks,   // Convert CacheBlock[] → Anthropic API format
-
   // Token estimation
   estimateTokens,           // Rough estimate (bytes / 4)
   estimateTokensForFileType, // File-type-aware (JSON = bytes / 2)
 
-  // Budget tracking
-  createBudgetTracker,  // Create a new tracker
-  checkBudget,          // Check budget → continue or stop
+  // Budget
+  createBudgetTracker,       // Create a new tracker
+  checkBudget,               // Check budget → continue or stop
+  parseTokenBudget,          // Parse "+500k" → 500_000
 
-  // Low-level helpers
-  section,              // Create a static Section object
-  dynamicSection,       // Create a dynamic Section object
-  defineTool,           // Create a ToolDef with fail-closed defaults
-  SectionCache,         // Section cache class
-  ToolCache,            // Tool cache class
-  resolveSections,      // Resolve sections against cache
-  compileTool,          // Compile a single tool
-  compileTools,         // Compile all tools
+  // Low-level (for custom compilers)
+  splitAtBoundary,           // Split text at sentinel → CacheBlock[]
+  section,                   // Create a static Section object
+  dynamicSection,            // Create a dynamic Section object
+  defineTool,                // Create a ToolDef with fail-closed defaults
+  SectionCache,              // Section cache class
+  ToolCache,                 // Tool cache class
+  resolveSections,           // Resolve sections against cache
+  compileTool,               // Compile a single tool
+  compileTools,              // Compile all tools
 } from 'promptloom'
-```
-
-## CLI
-
-```bash
-# Run the built-in demo (visualizes the 7-layer assembly)
-bun run bin/cli.ts demo
-```
-
-Output:
-
-```
-  Sections
-  ─────────────────────────────────────────────
-  STATIC   identity
-  STATIC   system
-  STATIC   doing_tasks
-  STATIC   actions
-  STATIC   tool_usage
-  STATIC   style
-  ───────  cache boundary
-  DYNAMIC  env
-  DYNAMIC  git
-  DYNAMIC  memory
-
-  Cache Blocks
-  ─────────────────────────────────────────────
-  Block 1  scope=global  ~212 tokens, 27 lines
-  Block 2  scope=none    ~56 tokens, 11 lines
-
-  Tools
-  ─────────────────────────────────────────────
-  Bash         prompt=~55t  schema=~95t
-  Read         prompt=~45t  schema=~128t
-  Edit         prompt=~45t  schema=~88t
-
-  Token Estimates
-  ─────────────────────────────────────────────
-  System prompt:  268 tokens
-  Tool schemas:   456 tokens
-  Total:          724 tokens
 ```
 
 ## Background: Claude Code's Prompt Architecture
@@ -281,9 +379,9 @@ Their system prompt is assembled from 7+ layers:
 
 Layers 1-6 are **static** (globally cacheable). Layer 7+ is **dynamic** (session-specific). The boundary between them is a literal sentinel string that the API layer uses to annotate cache scopes.
 
-Each of their 42 tools carries its own `prompt.ts` — an LLM-facing instruction manual that's injected into the tool description and cached per session.
+Sections are conditionally included based on feature flags (`feature('TOKEN_BUDGET')`), user type (`process.env.USER_TYPE === 'ant'`), and model capabilities. Each of their 42+ tools carries its own `prompt.ts`, and tools above a context threshold are deferred (loaded via `ToolSearchTool` on demand).
 
-promptloom gives you these same primitives.
+promptloom gives you all of these primitives.
 
 ## License
 
