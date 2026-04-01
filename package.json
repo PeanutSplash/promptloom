@@ -1,6 +1,6 @@
 {
   "name": "promptloom",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Weave production-grade LLM prompts with cache boundaries, tool injection, and token budgeting. Reverse-engineered from Claude Code's 7-layer prompt architecture.",
   "type": "module",
   "main": "./dist/index.cjs",
