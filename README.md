@@ -334,7 +334,7 @@ import { toAnthropic, toOpenAI, toBedrock } from 'promptloom'
 
 toAnthropic(result)  // { system: TextBlockParam[], tools: AnthropicTool[] }
 toOpenAI(result)     // { system: string, tools: { type: 'function', function }[] }
-toBedrock(result)    // { system: BedrockTextBlock[], toolConfig: { tools } }
+toBedrock(result)    // { system: BedrockSystemBlock[], toolConfig: { tools } }
 ```
 
 ### Standalone Utilities
