@@ -365,7 +365,7 @@ import {
 
 ## Background: Claude Code's Prompt Architecture
 
-This library extracts patterns from Claude Code's source (leaked via unstripped source maps in March 2025). The key insight: **Anthropic treats prompts as compiler output, not handwritten text.**
+This library extracts patterns from Claude Code's source (leaked via unstripped source maps in March 2026). The key insight: **Anthropic treats prompts as compiler output, not handwritten text.**
 
 Their system prompt is assembled from 7+ layers:
 

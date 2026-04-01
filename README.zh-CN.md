@@ -365,7 +365,7 @@ import {
 
 ## 背景：Claude Code 的提示词架构
 
-本库提取自 Claude Code 的源码（2025 年 3 月通过未剥离的 source map 泄露）。核心洞察：**Anthropic 把提示词当编译器输出来优化，而不是手写文本。**
+本库提取自 Claude Code 的源码（2026 年 3 月通过未剥离的 source map 泄露）。核心洞察：**Anthropic 把提示词当编译器输出来优化，而不是手写文本。**
 
 他们的系统提示词由 7+ 层组装：
 
