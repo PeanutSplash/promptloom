@@ -1,14 +1,14 @@
 /**
- * promptc — Prompt Compiler
+ * promptloom — Prompt Compiler
  *
- * Production-grade prompt assembly with cache boundaries,
+ * Weave production-grade LLM prompts with cache boundaries,
  * tool injection, and token budgeting.
  *
- * Inspired by Claude Code's 7-layer prompt architecture.
+ * Reverse-engineered from Claude Code's 7-layer prompt architecture.
  *
  * @example
  * ```ts
- * import { PromptCompiler } from 'promptc'
+ * import { PromptCompiler } from 'promptloom'
  *
  * const pc = new PromptCompiler({ enableGlobalCache: true })
  *

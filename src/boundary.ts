@@ -1,5 +1,5 @@
 /**
- * promptc — Cache boundary splitting
+ * promptloom — Cache boundary splitting
  *
  * Implements Claude Code's cache boundary mechanism:
  * - A sentinel string divides the prompt into static (cacheable) and dynamic zones
@@ -12,7 +12,7 @@
 import type { CacheBlock, CacheScope } from './types.ts'
 
 /** The sentinel string used to mark the cache boundary */
-export const CACHE_BOUNDARY = '__PROMPTC_CACHE_BOUNDARY__'
+export const CACHE_BOUNDARY = '__PROMPTLOOM_CACHE_BOUNDARY__'
 
 export interface SplitOptions {
   /** Cache scope for content before the boundary (default: 'global') */

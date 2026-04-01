@@ -1,5 +1,5 @@
 /**
- * promptc — Section management
+ * promptloom — Section management
  *
  * Implements the two-tier section system from Claude Code:
  * - `section()`: cached within session, computed once

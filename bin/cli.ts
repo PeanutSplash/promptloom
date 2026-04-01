@@ -1,11 +1,11 @@
 #!/usr/bin/env bun
 /**
- * promptc CLI — Visualize prompt compilation
+ * promptloom CLI — Visualize prompt compilation
  *
  * Usage:
- *   promptc demo              Run the built-in demo
- *   promptc inspect <file>    Inspect a promptc config file
- *   promptc tokens <file>     Show token estimates
+ *   promptloom demo              Run the built-in demo
+ *   promptloom inspect <file>    Inspect a promptloom config file
+ *   promptloom tokens <file>     Show token estimates
  */
 
 import { PromptCompiler, toAnthropicBlocks } from '../src/index.ts'
@@ -24,7 +24,7 @@ const red = (s: string) => `\x1b[31m${s}\x1b[0m`
 // ─── Demo ────────────────────────────────────────────────────────
 
 async function runDemo() {
-  console.log(bold('\n  promptc — Prompt Compiler Demo\n'))
+  console.log(bold('\n  promptloom — Prompt Compiler Demo\n'))
   console.log(dim('  Simulating Claude Code\'s 7-layer prompt assembly pattern\n'))
 
   const pc = new PromptCompiler({ enableGlobalCache: true })
@@ -246,18 +246,18 @@ switch (command) {
   case '--help':
   case '-h':
     console.log(`
-${bold('promptc')} — Prompt Compiler
+${bold('promptloom')} — Prompt Compiler
 
 ${dim('Usage:')}
-  promptc demo      Run the built-in demo
-  promptc --help    Show this help
+  promptloom demo      Run the built-in demo
+  promptloom --help    Show this help
 
 ${dim('Library usage:')}
-  import { PromptCompiler } from 'promptc'
+  import { PromptCompiler } from 'promptloom'
 `)
     break
   default:
     console.log(red(`Unknown command: ${command}`))
-    console.log(dim('Run `promptc --help` for usage.'))
+    console.log(dim('Run `promptloom --help` for usage.'))
     process.exit(1)
 }

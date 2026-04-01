@@ -1,5 +1,5 @@
 /**
- * promptc — Token estimation utilities
+ * promptloom — Token estimation utilities
  *
  * Mirrors Claude Code's token counting strategy:
  * - Rough estimation based on byte length (fast, no API call)

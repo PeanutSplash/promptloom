@@ -1,5 +1,5 @@
 /**
- * promptc — Core type definitions
+ * promptloom — Core type definitions
  *
  * Inspired by Claude Code's prompt architecture:
  * - Sections are the building blocks of a system prompt

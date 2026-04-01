@@ -1,5 +1,5 @@
 /**
- * promptc — The Prompt Compiler
+ * promptloom — The Prompt Compiler
  *
  * Implements Claude Code's 7-layer prompt assembly pattern:
  *

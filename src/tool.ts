@@ -1,5 +1,5 @@
 /**
- * promptc — Tool prompt management
+ * promptloom — Tool prompt management
  *
  * In Claude Code, every tool has its own `prompt.ts` — a "user manual"
  * written for the LLM. Tool prompts are:
