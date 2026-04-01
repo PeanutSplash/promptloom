@@ -1,0 +1,26 @@
+{
+  "name": "promptc",
+  "version": "0.1.0",
+  "description": "Prompt Compiler — production-grade prompt assembly with cache boundaries, tool injection, and token budgeting. Inspired by Claude Code's 7-layer prompt architecture.",
+  "type": "module",
+  "module": "src/index.ts",
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "bin": {
+    "promptc": "bin/cli.ts"
+  },
+  "scripts": {
+    "dev": "bun run bin/cli.ts",
+    "test": "bun test",
+    "check": "bunx tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3"
+  },
+  "peerDependencies": {
+    "typescript": "^6.0"
+  },
+  "license": "MIT"
+}
